@@ -3,7 +3,7 @@
 Приложение соцсети и мессенджера «ало» для Android (Kotlin, Jetpack Compose). Код приложения для iPhone:
 [AloSocialNetwork/AloiOS](https://github.com/AloSocialNetwork/AloiOS).
 
-Готовая сборка: https://test.xn--80awj.online/downloads/android/latest.apk (Android 7.0 и новее, 64- и 32-битные телефоны).
+Готовая сборка: https://test.xn--80awj.online/downloads/android/latest.apk (Android 7.0 и новее, только 64-битные телефоны).
 Установленное приложение обновляется само.
 
 ## Что готово

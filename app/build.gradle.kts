@@ -47,10 +47,10 @@ android {
         versionName = providers.gradleProperty("aloVersionName").orNull ?: "0.1.7"
 
         ndk {
-            // 64-bit phones and the Apple Silicon AVD use arm64-v8a; armeabi-v7a is for 32-bit phones (often Android 7–9,
-            // or a 64-bit CPU with a 32-bit system). One APK holds both, so the updater and latest.apk stay one file.
-            // x86/x86_64 stay out: no phone needs them, and every ABI adds ~40 MB of WebRTC, MapLibre and libsignal.
-            abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+            // 64-bit ARM only: phones and the Apple Silicon AVD. 32-bit (armeabi-v7a) was shipped in 0.1.7 and dropped
+            // again on 2026-11-03 by the owner's decision: those phones are too old for the rest of the app anyway
+            // (WebView-based captcha, no passkeys), and each ABI adds ~30 MB of WebRTC, MapLibre and libsignal.
+            abiFilters += "arm64-v8a"
         }
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
