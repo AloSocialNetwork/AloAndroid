@@ -1,0 +1,6 @@
+# Copy to alo-local.properties (not in git) and fill in to build with push notifications (Firebase Cloud Messaging).
+# Without it the app builds and works, only FCM push stays off. Values: Firebase console → Project settings → Android app.
+firebaseProjectId=
+firebaseApplicationId=
+firebaseSenderId=
+firebaseApiKey=

@@ -1,0 +1,40 @@
+# Only the app goes to git: everything at the top level is ignored except the list below. The folder also keeps
+# local-only things that must never be published: another company's app and site saved for design reference
+# (itd-xapk, site-mirror, site-audit-itd.md and its *.json maps), screenshots, internal server notes (docs), builds.
+/*
+!/.gitignore
+!/.github/
+!/app/
+!/design/
+!/gradle/
+!/build.gradle.kts
+!/settings.gradle.kts
+!/gradle.properties
+!/gradlew
+!/gradlew.bat
+!/README.md
+!/LICENSE
+!/THIRD_PARTY_NOTICES.md
+!/alo-local.properties.example
+
+# Inside the app: build output and machine files.
+/app/build/
+/app/release/
+*.iml
+.DS_Store
+*.log
+.cxx
+.externalNativeBuild
+*.apk
+*.aab
+*.idsig
+
+# Signing and machine secrets, wherever they are.
+*.jks
+*.keystore
+*.p12
+*.pem.key
+keystore.properties
+local.properties
+alo-local.properties
+google-services.json

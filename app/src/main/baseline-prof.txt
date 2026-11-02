@@ -1,0 +1,4 @@
+# Ahead-of-time compile all of Alo's own code. Without this, screens run in ART's interpreter until the JIT catches up,
+# which is the first scroll of every list after an install. Compose and the other libraries bring their own profiles.
+HSPLcom/alo/android/**->**(**)**
+Lcom/alo/android/**;

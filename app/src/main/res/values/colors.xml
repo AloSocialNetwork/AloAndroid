@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="alo_background">#FFFFFF</color>
+    <color name="alo_blue">#2A7DE1</color>
+    <color name="alo_border">#D9E6F4</color>
+    <color name="alo_text">#162033</color>
+</resources>
