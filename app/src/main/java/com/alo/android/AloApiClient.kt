@@ -4,7 +4,6 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import android.util.Base64
-import android.webkit.CookieManager
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -1989,7 +1988,7 @@ class AloApiClient(
             setRequestProperty("X-Requested-With", "AloAndroid")
             applyInstallIdentityHeader()
         }
-        val cookieHeader = withContext(Dispatchers.Main) { CookieManager.getInstance().getCookie(cookieUrl) }
+        val cookieHeader = withContext(Dispatchers.Main) { AloCookies.get(cookieUrl) }
         if (!cookieHeader.isNullOrBlank()) connection.setRequestProperty("Cookie", cookieHeader)
         try {
             if (connection.responseCode !in 200..299 || connection.contentLengthLong > maxBytes) return@withContext null
@@ -2284,7 +2283,7 @@ class AloApiClient(
             applyInstallIdentityHeader()
         }
         val cookieHeader = withContext(Dispatchers.Main.immediate) {
-            CookieManager.getInstance().getCookie(cookieUrl)
+            AloCookies.get(cookieUrl)
         }
         if (!cookieHeader.isNullOrBlank()) {
             connection.setRequestProperty("Cookie", cookieHeader)
@@ -3820,7 +3819,7 @@ class AloApiClient(
             }
         }
         val cookieHeader = withContext(Dispatchers.Main.immediate) {
-            CookieManager.getInstance().getCookie(cookieUrl)
+            AloCookies.get(cookieUrl)
         }
         if (!cookieHeader.isNullOrBlank()) {
             connection.setRequestProperty("Cookie", cookieHeader)
@@ -5370,7 +5369,7 @@ class AloApiClient(
                 }
                 if (isAloOrigin) {
                     val cookieHeader = withContext(Dispatchers.Main) {
-                        CookieManager.getInstance().getCookie(cookieUrl)
+                        AloCookies.get(cookieUrl)
                     }
                     if (!cookieHeader.isNullOrBlank()) {
                         connection.setRequestProperty("Cookie", cookieHeader)
@@ -6064,7 +6063,7 @@ class AloApiClient(
         }
         try {
             val cookieHeader = withContext(Dispatchers.Main) {
-                CookieManager.getInstance().getCookie(cookieUrl)
+                AloCookies.get(cookieUrl)
             }
             if (!cookieHeader.isNullOrBlank()) connection.setRequestProperty("Cookie", cookieHeader)
             connection.outputStream.use { output -> output.write(chunk) }
@@ -6488,8 +6487,8 @@ class AloApiClient(
         libSignalStore = null
         libSignalEngine = null
         withContext(Dispatchers.Main) {
-            val cookieManager = CookieManager.getInstance()
-            cookieManager.removeAllCookies(null)
+            val cookieManager = AloCookies
+            cookieManager.removeAll()
             cookieManager.flush()
         }
     }
@@ -6527,7 +6526,7 @@ class AloApiClient(
             }
 
             val cookieHeader = withContext(Dispatchers.Main) {
-                CookieManager.getInstance().getCookie(cookieUrl)
+                AloCookies.get(cookieUrl)
             }
             if (!cookieHeader.isNullOrBlank()) {
                 connection.setRequestProperty("Cookie", cookieHeader)
@@ -6614,7 +6613,7 @@ class AloApiClient(
         }
         try {
             val cookieHeader = withContext(Dispatchers.Main) {
-                CookieManager.getInstance().getCookie(cookieUrl)
+                AloCookies.get(cookieUrl)
             }
             if (!cookieHeader.isNullOrBlank()) {
                 connection.setRequestProperty("Cookie", cookieHeader)
@@ -8220,7 +8219,7 @@ class AloApiClient(
             applyInstallIdentityHeader()
         }
         val cookieHeader = withContext(Dispatchers.Main) {
-            CookieManager.getInstance().getCookie(cookieUrl)
+            AloCookies.get(cookieUrl)
         }
         if (!cookieHeader.isNullOrBlank()) {
             connection.setRequestProperty("Cookie", cookieHeader)
@@ -9673,9 +9672,9 @@ class AloApiClient(
         if (setCookies.isEmpty()) return
 
         withContext(Dispatchers.Main) {
-            val cookieManager = CookieManager.getInstance()
+            val cookieManager = AloCookies
             setCookies.forEach { cookie ->
-                cookieManager.setCookie(cookieUrl, cookie)
+                cookieManager.set(cookieUrl, cookie)
             }
             cookieManager.flush()
         }

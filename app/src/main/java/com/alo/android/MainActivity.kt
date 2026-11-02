@@ -13,7 +13,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.SystemClock
-import android.webkit.CookieManager
 import android.webkit.PermissionRequest
 import android.webkit.MimeTypeMap
 import android.webkit.ValueCallback
@@ -442,7 +441,7 @@ class MainActivity : ComponentActivity() {
         // The chat wallpaper's line art, decoded in the background so the first chat opens without waiting for it.
         AloChatPatternCache.warm(this)
 
-        CookieManager.getInstance().setAcceptCookie(true)
+        AloCookies.acceptCookies()
         // Cross-client checks: the test person's session on the throwaway server (see AloDebugServer).
         if (BuildConfig.ALO_DEV_HOOKS && AloDebugServer.baseUrl.isNotBlank() && AloDebugServer.sessionToken.isNotBlank() &&
             !currentCookieHeader().contains("alo_session=${AloDebugServer.sessionToken}")
@@ -2442,7 +2441,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun hasStoredSessionCookie(): Boolean {
-        return !CookieManager.getInstance().getCookie(AloServerConfiguration.apiBaseUrl).isNullOrBlank()
+        return !AloCookies.get(AloServerConfiguration.apiBaseUrl).isNullOrBlank()
     }
 
     private fun restoreActiveAccountCookiesIfNeeded() {
@@ -2455,17 +2454,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun restoreCookieHeader(cookieHeader: String) {
-        val cookieManager = CookieManager.getInstance()
-        cookieManager.removeAllCookies(null)
+        val cookieManager = AloCookies
+        cookieManager.removeAll()
         cookieHeader.split(';')
             .map(String::trim)
             .filter(String::isNotBlank)
-            .forEach { cookie -> cookieManager.setCookie(AloServerConfiguration.apiBaseUrl, cookie) }
+            .forEach { cookie -> cookieManager.set(AloServerConfiguration.apiBaseUrl, cookie) }
         cookieManager.flush()
     }
 
-    private fun currentCookieHeader(): String = CookieManager.getInstance()
-        .getCookie(AloServerConfiguration.apiBaseUrl)
+    private fun currentCookieHeader(): String = AloCookies.get(AloServerConfiguration.apiBaseUrl)
         .orEmpty()
         .trim()
 

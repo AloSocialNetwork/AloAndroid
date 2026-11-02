@@ -1,6 +1,5 @@
 package com.alo.android
 
-import android.webkit.CookieManager
 import java.net.URL
 
 /**
@@ -63,8 +62,8 @@ internal object AloServerConfiguration {
         if (!sameOrigin(requestUrl, appUrl)) return emptyMap()
 
         val cookie = runCatching {
-            CookieManager.getInstance().getCookie(requestUrl.toString())
-                ?: CookieManager.getInstance().getCookie(apiBaseUrl)
+            AloCookies.get(requestUrl.toString())
+                ?: AloCookies.get(apiBaseUrl)
         }.getOrNull().orEmpty()
 
         return buildMap {

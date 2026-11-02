@@ -195,6 +195,9 @@ internal fun AloQrLoginScannerOverlay(
     val mainExecutor = remember(context) { ContextCompat.getMainExecutor(context) }
     val analysisExecutor = remember { Executors.newSingleThreadExecutor() }
     val delivered = remember { AtomicBoolean(false) }
+    // The camera would not open (an old or busy camera, CameraX refusing this phone): the window stays, says so and keeps
+    // «Показать QR на этом устройстве». It used to close by itself, which left no way to sign in by QR on such a phone.
+    var cameraFailed by remember { mutableStateOf(false) }
     val hasPermission = ContextCompat.checkSelfPermission(
         context,
         Manifest.permission.CAMERA
@@ -202,6 +205,9 @@ internal fun AloQrLoginScannerOverlay(
 
     DisposableEffect(Unit) {
         onDispose { analysisExecutor.shutdown() }
+    }
+    LaunchedEffect(cameraFailed) {
+        if (cameraFailed) runCatching { providerFuture.get().unbindAll() }
     }
 
     // The emulator's camera cannot show a code: a test build reads a real screenshot of the sign-in page, put at
@@ -246,27 +252,37 @@ internal fun AloQrLoginScannerOverlay(
                         if (image == null || delivered.get()) {
                             imageProxy.close()
                         } else {
-                            scanner.process(
-                                InputImage.fromMediaImage(image, imageProxy.imageInfo.rotationDegrees)
-                            )
-                                .addOnSuccessListener { codes ->
-                                    val value = codes.firstOrNull()?.rawValue.orEmpty()
-                                    if (value.isNotBlank() && delivered.compareAndSet(false, true)) {
-                                        onScanned(value)
+                            // A frame in a format ML Kit does not take throws here: skip it instead of falling.
+                            runCatching {
+                                scanner.process(
+                                    InputImage.fromMediaImage(image, imageProxy.imageInfo.rotationDegrees)
+                                )
+                                    .addOnSuccessListener { codes ->
+                                        val value = codes.firstOrNull()?.rawValue.orEmpty()
+                                        if (value.isNotBlank() && delivered.compareAndSet(false, true)) {
+                                            onScanned(value)
+                                        }
                                     }
-                                }
-                                .addOnCompleteListener { imageProxy.close() }
+                                    .addOnCompleteListener { imageProxy.close() }
+                            }.onFailure { imageProxy.close() }
                         }
                     }
                     provider.unbindAll()
-                    provider.bindToLifecycle(
+                    val camera = provider.bindToLifecycle(
                         lifecycleOwner,
                         CameraSelector.DEFAULT_BACK_CAMERA,
                         preview,
                         analysis
                     )
+                    // Bound, but the camera itself may still fail to open (it reports that as an error state).
+                    camera.cameraInfo.cameraState.observe(lifecycleOwner) { cameraState ->
+                        val error = cameraState.error
+                        if (error != null && error.type == androidx.camera.core.CameraState.ErrorType.CRITICAL) {
+                            cameraFailed = true
+                        }
+                    }
                 }.onFailure {
-                    onDismiss()
+                    cameraFailed = true
                 }
             }
             providerFuture.addListener(listener, mainExecutor)
@@ -312,7 +328,15 @@ internal fun AloQrLoginScannerOverlay(
                         )
                     }
                 }
-                if (hasPermission) {
+                if (hasPermission && cameraFailed) {
+                    Text(
+                        text = "Камера не открылась на этом телефоне.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AloNativeAppText,
+                        textAlign = TextAlign.Center
+                    )
+                    AloQrScannerSecondaryAction(secondaryAction)
+                } else if (hasPermission) {
                     AndroidView(
                         factory = { ctx ->
                             PreviewView(ctx).apply {
@@ -331,14 +355,7 @@ internal fun AloQrLoginScannerOverlay(
                         color = AloNativeAppMuted,
                         textAlign = TextAlign.Center
                     )
-                    secondaryAction?.let { (title, action) ->
-                        Text(
-                            text = title,
-                            modifier = Modifier.heightIn(min = 44.dp).clickable(onClick = action).wrapContentHeight(),
-                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                            color = AloNativeAppAccent
-                        )
-                    }
+                    AloQrScannerSecondaryAction(secondaryAction)
                 } else {
                     Text(
                         text = "Для сканирования нужен доступ к камере.",
@@ -353,8 +370,22 @@ internal fun AloQrLoginScannerOverlay(
                             contentColor = AloNativeAppButtonText
                         )
                     ) { Text("Понятно") }
+                    AloQrScannerSecondaryAction(secondaryAction)
                 }
             }
         }
+    }
+}
+
+/** The way out under the camera (or instead of it), e.g. «Показать QR на этом устройстве» on the sign-in screen. */
+@Composable
+private fun AloQrScannerSecondaryAction(action: Pair<String, () -> Unit>?) {
+    action?.let { (title, onClick) ->
+        Text(
+            text = title,
+            modifier = Modifier.heightIn(min = 44.dp).clickable(onClick = onClick).wrapContentHeight(),
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = AloNativeAppAccent
+        )
     }
 }

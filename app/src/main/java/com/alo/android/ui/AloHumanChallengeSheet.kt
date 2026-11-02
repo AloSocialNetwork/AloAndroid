@@ -96,7 +96,8 @@ private fun AloHumanChallengeCard(
     val mainHandler = remember { Handler(Looper.getMainLooper()) }
     val context = LocalContext.current
     var webView: WebView? by remember(state.url) { mutableStateOf(null) }
-    // Chrome version of a WebView too old for Cloudflare's check, or 0. Known before loading; the page also reports it.
+    // 0 = the WebView can run the check; N = its Chrome version is too old; -1 = no WebView at all (missing or being
+    // updated). Known before loading; the page also reports an old one.
     var outdatedWebView by remember(state.url) { mutableStateOf(aloOutdatedWebViewMajor(context)) }
 
     DisposableEffect(state.url) {
@@ -145,7 +146,7 @@ private fun AloHumanChallengeCard(
             }
         }
 
-        if (outdatedWebView > 0) {
+        if (outdatedWebView != 0) {
             AloOutdatedWebViewContent(version = outdatedWebView, onOpenPlay = { aloOpenWebViewInPlay(context) })
             return@Column
         }
@@ -220,7 +221,8 @@ private fun AloHumanChallengeCard(
 private const val ALO_OLDEST_CHALLENGE_WEBVIEW = 80
 
 internal fun aloOutdatedWebViewMajor(context: Context): Int {
-    val agent = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull() ?: return 0
+    // Without a WebView this throws (MissingWebViewPackageException), and so would creating the page below.
+    val agent = runCatching { WebSettings.getDefaultUserAgent(context) }.getOrNull() ?: return -1
     val major = Regex("""Chrome/(\d+)""").find(agent)?.groupValues?.get(1)?.toIntOrNull() ?: return 0
     return if (major in 1 until ALO_OLDEST_CHALLENGE_WEBVIEW) major else 0
 }
@@ -247,9 +249,15 @@ private fun AloOutdatedWebViewContent(version: Int, onOpenPlay: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "Встроенный браузер телефона устарел" + (if (version > 1) " (Chrome $version)" else "") +
-                ", и проверка Cloudflare на нём не запускается. Обновите в Google Play «Android System WebView» " +
-                "или Chrome, затем попробуйте снова.",
+            text = if (version < 0) {
+                "Встроенный браузер телефона недоступен: он не установлен или сейчас обновляется, а проверка Cloudflare " +
+                    "открывается в нём. Установите или включите в Google Play «Android System WebView» или Chrome, " +
+                    "затем попробуйте снова."
+            } else {
+                "Встроенный браузер телефона устарел" + (if (version > 1) " (Chrome $version)" else "") +
+                    ", и проверка Cloudflare на нём не запускается. Обновите в Google Play «Android System WebView» " +
+                    "или Chrome, затем попробуйте снова."
+            },
             style = MaterialTheme.typography.bodyLarge,
             color = AloNativeAppText
         )
