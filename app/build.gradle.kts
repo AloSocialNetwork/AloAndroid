@@ -113,6 +113,11 @@ android {
         buildConfig = true
     }
 
+    // Lint findings that existed when the code went public (2026-11-03) are listed in lint-baseline.xml; CI fails only on new ones.
+    lint {
+        baseline = file("lint-baseline.xml")
+    }
+
     packaging {
         jniLibs {
             excludes += "**/libsignal_jni_testing.so"

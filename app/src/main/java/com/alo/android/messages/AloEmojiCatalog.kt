@@ -95,7 +95,7 @@ internal object AloEmojiCatalog {
 /** The emoji a person used last, shown first in the panel (Telegram's «Недавние»). */
 internal object AloEmojiRecents {
     private const val PREFS = "alo-android"
-    private const val KEY = "emoji_recents_v1"
+    private const val KEY = "emoji_recents_v1" // gitleaks:allow (a preferences key name, not a secret)
     const val LIMIT = 32
 
     fun load(context: Context): List<String> =
