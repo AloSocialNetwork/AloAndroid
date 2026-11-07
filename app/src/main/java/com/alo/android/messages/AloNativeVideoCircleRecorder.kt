@@ -124,7 +124,7 @@ private fun Recorder.currentVideoEncoderOrNull(): Result<Any?> = runCatching {
     Recorder::class.java.getDeclaredField("mVideoEncoder").apply { isAccessible = true }.get(this)
 }
 
-@OptIn(ExperimentalPersistentRecording::class)
+@androidx.annotation.OptIn(ExperimentalPersistentRecording::class)
 @Composable
 internal fun VideoCircleRecorderOverlay(
     bottomInset: Dp = 0.dp,

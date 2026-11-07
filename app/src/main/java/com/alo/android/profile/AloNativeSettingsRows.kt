@@ -63,6 +63,8 @@ import androidx.compose.ui.unit.sp
 internal val settingsRowInset = 16.dp
 /** The website's --gutter: cards keep this distance from the screen edges. */
 internal val settingsPageGutter = 20.dp
+/** How far a settings page starts below the screen top: the header (and the status bar) it scrolls under. */
+internal val LocalSettingsTopInset = androidx.compose.runtime.compositionLocalOf { 0.dp }
 /** Where a hairline starts under a row with a tile (16 inset + 30 tile + 8). */
 internal val settingsTileDividerStart = 54.dp
 

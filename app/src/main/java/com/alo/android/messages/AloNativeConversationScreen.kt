@@ -1957,8 +1957,7 @@ private fun ChannelSubscriberBar(
                     modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
                 )
             }
-        } else
-        AloNativeGlassPanel(
+        } else AloNativeGlassPanel(
             modifier = Modifier
                 .padding(horizontal = 48.dp)
                 .heightIn(min = 40.dp)

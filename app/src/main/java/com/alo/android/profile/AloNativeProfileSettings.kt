@@ -37,6 +37,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Brush
 import android.net.Uri
 import android.content.Intent
@@ -543,12 +551,33 @@ internal fun ProfileSettingsSheet(
             border = BorderStroke(0.dp, Color.Transparent),
             shadowElevation = 0.dp
         ) {
-            Column(
+            // As on the iPhone: the pages scroll on under the header, which darkens them towards the top
+            // (opaque behind the clock, fading out below the title).
+            // Measured from the header itself (status bar + title row), without its fading tail.
+            val density = LocalDensity.current
+            var headerHeightPx by remember { mutableIntStateOf(0) }
+            val headerFade = 22.dp
+            val settingsTopInset = if (headerHeightPx > 0) with(density) { headerHeightPx.toDp() } - headerFade else AloScreenChrome.HeaderHeight
+            val headerShade = AloNativeAppBackground
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
             ) {
                 AloSettingsNavigationBar(
+                    modifier = Modifier
+                        .zIndex(1f)
+                        .background(
+                            Brush.verticalGradient(
+                                0f to headerShade,
+                                0.5f to headerShade.copy(alpha = 0.92f),
+                                0.78f to headerShade.copy(alpha = 0.6f),
+                                1f to headerShade.copy(alpha = 0f)
+                            )
+                        )
+                        .onSizeChanged { headerHeightPx = it.height }
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                        .padding(bottom = headerFade),
                     onBack = ::navigateBack,
                     title = when (activePage) {
                         AloSettingsPage.Root -> "Настройки"
@@ -602,7 +631,7 @@ internal fun ProfileSettingsSheet(
                             // then groups with a colour tile, a title and a grey subtitle on every row.
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(0.dp)
                             ) {
                                 item {
@@ -772,12 +801,12 @@ internal fun ProfileSettingsSheet(
                             }
                         }
 
-                        AloSettingsPage.DataStorage -> DataStorageSettingsPage()
+                        AloSettingsPage.DataStorage -> CompositionLocalProvider(LocalSettingsTopInset provides settingsTopInset) { DataStorageSettingsPage() }
 
                         AloSettingsPage.Notifications -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -917,7 +946,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Privacy -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 item {
@@ -1014,7 +1043,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.BlockedUsers -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -1039,7 +1068,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Theme -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -1071,23 +1100,27 @@ internal fun ProfileSettingsSheet(
                             }
                         }
 
-                        AloSettingsPage.Premium -> AloPremiumSettingsPage(
-                            api = premiumApi,
-                            onOpenLook = { page = AloSettingsPage.PremiumLook.name }
-                        )
+                        AloSettingsPage.Premium -> Box(Modifier.padding(top = settingsTopInset)) {
+                            AloPremiumSettingsPage(
+                                api = premiumApi,
+                                onOpenLook = { page = AloSettingsPage.PremiumLook.name }
+                            )
+                        }
 
-                        AloSettingsPage.PremiumLook -> AloPremiumLookPage(
-                            api = premiumApi,
-                            me = me,
-                            onOpenPremium = { page = AloSettingsPage.Premium.name }
-                        )
+                        AloSettingsPage.PremiumLook -> Box(Modifier.padding(top = settingsTopInset)) {
+                            AloPremiumLookPage(
+                                api = premiumApi,
+                                me = me,
+                                onOpenPremium = { page = AloSettingsPage.Premium.name }
+                            )
+                        }
 
                         AloSettingsPage.Business -> {
                             // iOS's BusinessProfileSettingsContent: labelled fields on 20pt cards, one big Save.
                             val autoReplyMissing = autoReplyEnabled && autoReplyMessage.isBlank()
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 item {
@@ -1282,7 +1315,7 @@ internal fun ProfileSettingsSheet(
                             // iOS's securityPage with AloAccountSecurityControls, card by card.
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -1498,7 +1531,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Accounts -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1570,7 +1603,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Passkeys -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1650,7 +1683,7 @@ internal fun ProfileSettingsSheet(
                             val exportReady = exportPassword.isNotBlank() && !isAccountSecurityLoading
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1700,7 +1733,7 @@ internal fun ProfileSettingsSheet(
                                 !isAccountSecurityLoading
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1756,7 +1789,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.PasswordChange -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = settingsTopInset + 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
