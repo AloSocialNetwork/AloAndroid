@@ -638,7 +638,8 @@ private fun AloChatListRow(
                         avatarUrl = conversation.peer.avatarUrl,
                         verified = false,
                         size = 56.dp,
-                        colorSeed = conversation.peer.id.toString()
+                        colorSeed = conversation.peer.id.toString(),
+                        modifier = Modifier.aloPremiumFrame(aloPremiumPeerId(conversation), 56.dp)
                     )
                 }
                 Column(Modifier.weight(1f)) {
@@ -652,12 +653,22 @@ private fun AloChatListRow(
                                 tint = AloNativeAppText.copy(alpha = 0.7f), modifier = Modifier.size(16.dp)
                             )
                         }
-                        Text(
-                            if (conversation.peer.entityType == "saved") "Избранное" else conversation.peer.name,
-                            color = if (conversation.kind == "secret") AloSecretGreen else AloNativeAppText,
-                            fontSize = 16.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp,
-                            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
-                        )
+                        val premiumId = aloPremiumPeerId(conversation)
+                        if (premiumId > 0 && conversation.kind != "secret") {
+                            // Alo Премиум: the name in its colour, then the star or the emoji status.
+                            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                AloPremiumName(conversation.peer.name, premiumId, 16.sp, FontWeight.Medium,
+                                    lineHeight = 20.sp, modifier = Modifier.weight(1f, fill = false))
+                                AloPremiumMark(premiumId, 14.dp)
+                            }
+                        } else {
+                            Text(
+                                if (conversation.peer.entityType == "saved") "Избранное" else conversation.peer.name,
+                                color = if (conversation.kind == "secret") AloSecretGreen else AloNativeAppText,
+                                fontSize = 16.sp, fontWeight = FontWeight.Medium, lineHeight = 20.sp,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+                            )
+                        }
                         Text(formatMessageTime(conversation.lastAt), color = AloNativeAppMuted, fontSize = 12.sp, maxLines = 1)
                     }
                     Row(

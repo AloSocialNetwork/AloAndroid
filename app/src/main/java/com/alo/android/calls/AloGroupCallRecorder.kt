@@ -13,15 +13,6 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-/**
- * Records a video chat's sound on the admin's phone, as iOS's AloGroupCallRecorder does: this phone's
- * microphone and everyone else's voices, mixed into one 48 kHz mono AAC file.
- *
- * Every source (one sink per audio track) delivers 10 ms PCM chunks on WebRTC's audio threads. Each
- * keeps a cursor on a shared timeline that starts with the recording; chunks are added there, and a
- * cursor that drifts from the wall clock by more than a quarter second snaps back. Mixed audio older
- * than half a second is final and goes to the encoder.
- */
 internal class AloGroupCallRecorder(val file: File) {
     private val lock = Any()
     private val startedAtNanos = System.nanoTime()

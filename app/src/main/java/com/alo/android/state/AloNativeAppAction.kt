@@ -31,6 +31,13 @@ sealed interface AloNativeAppAction {
     data object OpenChatPeerProfile : AloNativeAppAction
     data object CloseChatPeerProfile : AloNativeAppAction
     data object ToggleActiveChatMuted : AloNativeAppAction
+    /** Reads the open chat's mute state (the channel bar «Убрать звук» needs it as soon as the channel opens). */
+    data object LoadActiveChatMuted : AloNativeAppAction
+    /** «Подписаться» under a channel read before subscribing (Telegram's preview). */
+    data object JoinPreviewedChannel : AloNativeAppAction
+    /** A channel's chat from its page, also before subscribing. */
+    data class OpenChannelChat(val roomId: Int) : AloNativeAppAction
+    data class ToggleChannelSubscription(val channelId: Int) : AloNativeAppAction
     data class UpdateDirectChatAutoDelete(val peerId: Int, val seconds: Int) : AloNativeAppAction
     data class UpdateUserBlock(val userId: Int, val blocked: Boolean) : AloNativeAppAction
     data object Refresh : AloNativeAppAction
@@ -47,6 +54,8 @@ sealed interface AloNativeAppAction {
     data object OpenQrLoginScanner : AloNativeAppAction
     /** Keep this account's session on the device and sign in to another, as iOS's addAnotherAccount. */
     data object AddAnotherAccount : AloNativeAppAction
+    data object OpenAccountSwitcher : AloNativeAppAction
+    data object CloseAccountSwitcher : AloNativeAppAction
     data object CloseQrLoginScanner : AloNativeAppAction
     data class ApproveQrLoginPayload(val rawPayload: String) : AloNativeAppAction
     data object ConfirmQrLogin : AloNativeAppAction
@@ -126,7 +135,7 @@ sealed interface AloNativeAppAction {
     data object StartMessageRecording : AloNativeAppAction
     /** [send]: Telegram's release of a held voice recording sends it straight away. */
     data class StopMessageRecording(val cancel: Boolean, val send: Boolean = false) : AloNativeAppAction
-    data class CompleteVideoCircleRecording(val localUri: String, val durationSec: Int) : AloNativeAppAction
+    data class CompleteVideoCircleRecording(val localUri: String, val durationSec: Int, val send: Boolean = false) : AloNativeAppAction
     data object DiscardMessageDraft : AloNativeAppAction
     data class RemoveMessageDraftAttachment(val localUri: String) : AloNativeAppAction
     data class SendCatalogExpression(val media: AloCatalogExpressionMedia) : AloNativeAppAction
@@ -372,5 +381,5 @@ sealed interface AloNativeAppAction {
     /** Ends the voice recording: thrown away ([cancel]), or kept and, with [send], sent at once. */
     data class StopSecretRecording(val cancel: Boolean, val send: Boolean = false) : AloNativeAppAction
     /** The camera finished a circle ([localUri] is the square video): it is sealed and sent. */
-    data class CompleteSecretCircleRecording(val localUri: String, val durationSec: Int) : AloNativeAppAction
+    data class CompleteSecretCircleRecording(val localUri: String, val durationSec: Int, val send: Boolean = true) : AloNativeAppAction
 }

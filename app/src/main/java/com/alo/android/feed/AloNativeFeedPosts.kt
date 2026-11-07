@@ -176,7 +176,7 @@ internal fun FeedPostRow(
                             },
                             onClick = {
                                 menuExpanded = false
-                                clipboard.setText(AnnotatedString(buildAloLink("p", post.id.toString())))
+                                clipboard.setText(AnnotatedString(AloDeepLinkTarget.postUrl(post)))
                             }
                         )
                         val editPost = LocalAloPostEditor.current

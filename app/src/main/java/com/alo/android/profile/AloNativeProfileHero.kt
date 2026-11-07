@@ -95,10 +95,18 @@ internal fun ProfileHeroPanel(
             } else {
                 Box(Modifier.fillMaxSize().background(profileCoverBrush(me.coverStyle)))
             }
+            // Alo Премиум: an own GIF over the header picture.
+            val premiumExtras = AloPremiumDirectory.extras[me.id]
+            if (!premiumExtras?.coverGifUrl.isNullOrBlank()) {
+                AloAnimatedGif(aloPremiumUrl(premiumExtras!!.coverGifUrl), Modifier.fillMaxSize())
+            }
             Row(
                 modifier = Modifier.align(Alignment.TopEnd).padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (!premiumExtras?.musicUrl.isNullOrBlank()) {
+                    AloProfileMusicButton(aloPremiumUrl(premiumExtras!!.musicUrl), premiumExtras.musicTitle.ifBlank { "Музыка профиля" })
+                }
                 ProfileGlassButton(Icons.Outlined.Settings, "Настройки профиля", onOpenSettings)
                 ProfileGlassButton(Icons.Outlined.Palette, "Оформление профиля", onOpenCoverEditor)
             }
@@ -111,7 +119,9 @@ internal fun ProfileHeroPanel(
                     // The avatar holds your stories; the camera badge changes the photo.
                     AloProfileStoryAvatar(
                         user = AloEntitySummary(id = me.id, name = me.name, username = me.username, avatarUrl = me.avatarUrl, verified = me.verified),
-                        isOwn = true
+                        isOwn = true,
+                        // Alo Премиум: the ring goes on the story wrapper, which clips its content to a circle.
+                        modifier = Modifier.aloPremiumFrame(me.id, avatarSize)
                     ) { opensStories ->
                         AvatarBadge(
                             name = me.name, avatarUrl = me.avatarUrl, verified = false, size = avatarSize,
@@ -138,16 +148,16 @@ internal fun ProfileHeroPanel(
             identity = {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(
+                        AloPremiumName(
                             text = me.name,
-                            color = AloNativeAppText,
+                            userId = me.id,
                             fontSize = 22.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         if (me.verified) Icon(Icons.Rounded.Verified, null, tint = AloNativeAppAccent, modifier = Modifier.size(20.dp))
+                        AloPremiumMark(me.id, 20.dp)
                     }
                     Text(text = "@${me.username}", color = AloNativeAppMuted, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                 }
@@ -417,7 +427,7 @@ private fun ViewedProfileHeroCard(
     // and «Заявка отправлена» ask whether to undo them.
     var undoRelationAsked by remember(profile.id) { mutableStateOf(false) }
     val primaryAction = when (profile.kind) {
-        "channel" -> "Подписаться"
+        "channel" -> if (profile.following) "Вы подписаны" else "Подписаться"
         "group" -> "Написать"
         else -> when (profile.friendStatus) {
             "friends" -> "В друзьях"
@@ -551,11 +561,20 @@ private fun ViewedProfileHeroCard(
             } else {
                 Box(modifier = Modifier.fillMaxSize().background(profileCoverBrush(profile.coverStyle)))
             }
+            val viewedExtras = if (profile.kind == "user") AloPremiumDirectory.extras[profile.id] else null
+            if (!viewedExtras?.coverGifUrl.isNullOrBlank()) {
+                AloAnimatedGif(aloPremiumUrl(viewedExtras!!.coverGifUrl), Modifier.fillMaxSize())
+            }
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(Brush.verticalGradient(colors = listOf(Color.Transparent, Color(0x14070B12), Color(0x36070B12))))
             )
+            if (!viewedExtras?.musicUrl.isNullOrBlank()) {
+                Box(Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                    AloProfileMusicButton(aloPremiumUrl(viewedExtras!!.musicUrl), viewedExtras.musicTitle.ifBlank { "Музыка профиля" })
+                }
+            }
         }
         // The website's geometry, measured at a phone's width (#profile, 402px): the ringed avatar starts 17 in and 45 above the
         // cover's lower edge, the name 19 to its right and 63 below its top, the bio 15 under the ring.
@@ -569,7 +588,8 @@ private fun ViewedProfileHeroCard(
                 AloProfileStoryAvatar(
                     user = AloEntitySummary(id = profile.id, name = profile.title, username = profile.username,
                         avatarUrl = profile.avatarUrl, verified = profile.verified),
-                    isOwn = false
+                    isOwn = false,
+                    modifier = Modifier.aloPremiumFrame(if (profile.kind == "user") profile.id else 0, avatarSize)
                 ) { opensStories ->
                     // The checkmark sits by the name (as on your own profile): drawn on the avatar, the story ring cut it to a sliver.
                     Box {
@@ -607,17 +627,17 @@ private fun ViewedProfileHeroCard(
             identity = {
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        Text(
+                        AloPremiumName(
                             text = profile.title,
+                            userId = if (profile.kind == "user") profile.id else 0,
                             fontSize = 26.sp,
                             lineHeight = 30.sp,
                             fontWeight = FontWeight.ExtraBold,
-                            color = AloNativeAppText,
                             maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f, fill = false)
                         )
                         if (profile.verified) Icon(Icons.Rounded.Verified, "Подтверждённый профиль", tint = AloNativeAppAccent, modifier = Modifier.size(20.dp))
+                        AloPremiumMark(if (profile.kind == "user") profile.id else 0, 22.dp)
                     }
                     if (profile.username.isNotBlank()) {
                         Text(
@@ -644,7 +664,8 @@ private fun ViewedProfileHeroCard(
         )
         // The website's `.profile-actions`: two buttons of the same size, the friend/follow one filled when it calls to act.
         val showsPrimary = !(profile.kind == "channel" && profile.canManage)
-        val showsMessage = profile.kind == "user"
+        // A channel's chat opens from its page too, before subscribing (Telegram's preview with «Подписаться»).
+        val showsMessage = profile.kind == "user" || (profile.kind == "channel" && profile.messengerRoomId > 0)
         if (showsPrimary || showsMessage) {
             val invitation = when (profile.kind) {
                 "user" -> when (profile.friendStatus) {
@@ -667,7 +688,7 @@ private fun ViewedProfileHeroCard(
                     modifier = Modifier.weight(1f)
                 )
                 if (showsMessage) ProfileActionButton(
-                    title = "Сообщение",
+                    title = if (profile.kind == "channel") "Открыть" else "Сообщение",
                     icon = Icons.Rounded.ChatBubbleOutline,
                     filled = false,
                     enabled = canMessage,

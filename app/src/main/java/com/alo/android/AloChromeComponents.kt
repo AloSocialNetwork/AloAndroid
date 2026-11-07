@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -178,7 +180,11 @@ internal fun CompactTitleBar(
 internal fun AloBottomBar(
     modifier: Modifier = Modifier,
     activeTab: AloAppTab,
-    onSelect: (AloAppTab) -> Unit
+    onSelect: (AloAppTab) -> Unit,
+    /** Unread messages of the other accounts on this phone, shown on «Профиль» as on Telegram's Settings tab. */
+    profileBadge: Int = 0,
+    /** A hold on «Профиль» opens the account switcher. */
+    onProfileLongPress: (() -> Unit)? = null
 ) {
     val tabs = listOf(
         Triple(AloAppTab.Feed, Icons.Rounded.Home, "Лента"),
@@ -234,7 +240,9 @@ internal fun AloBottomBar(
                         selected = activeTab == tab,
                         icon = icon,
                         label = label,
-                        onClick = { onSelect(tab) }
+                        badge = if (tab == AloAppTab.Profile) profileBadge else 0,
+                        onClick = { onSelect(tab) },
+                        onLongClick = if (tab == AloAppTab.Profile) onProfileLongPress else null
                     )
                 }
             }
@@ -248,8 +256,11 @@ private fun AloBottomBarItem(
     selected: Boolean,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     label: String,
-    onClick: () -> Unit
+    badge: Int = 0,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null
 ) {
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val contentColor = animateColorAsState(
         targetValue = if (selected) AloNativeAppAccent else AloNativeAppMuted,
         animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing),
@@ -269,7 +280,15 @@ private fun AloBottomBarItem(
             modifier = Modifier
                 .fillMaxSize()
                 .clip(RoundedCornerShape(percent = 50))
-                .clickable(onClick = onClick)
+                .combinedClickable(
+                    onClick = onClick,
+                    onLongClick = onLongClick?.let { action ->
+                        {
+                            haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                            action()
+                        }
+                    }
+                )
                 .padding(horizontal = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -287,6 +306,21 @@ private fun AloBottomBarItem(
                         .size(26.dp)
                         .scale(iconScale)
                 )
+                if (badge > 0) {
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .offset(x = 10.dp, y = (-4).dp)
+                            .heightIn(min = 17.dp)
+                            .widthIn(min = 17.dp)
+                            .clip(RoundedCornerShape(9.dp))
+                            .background(Color(0xFFFF3B30))
+                            .padding(horizontal = 4.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(AloAccountSwitcher.unreadLabel(badge), color = Color.White, fontSize = 10.5.sp, lineHeight = 12.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
+                }
             }
             Text(
                 text = label,

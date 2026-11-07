@@ -95,7 +95,10 @@ enum class AuthStep {
     VerifyEmailCode,
     QrLogin,
     /** A new device scanned the code a signed-in device shows and waits for its owner to confirm. */
-    DeviceLinkWaiting
+    DeviceLinkWaiting,
+    /** «Забыли пароль?»: the code from the letter, then a new password (the site's reset steps). */
+    ResetCode,
+    ResetPassword
 }
 
 enum class EmailVerificationOrigin {
@@ -109,6 +112,7 @@ data class AuthUiState(
     val username: String = "",
     val email: String = "",
     val password: String = "",
+    val newPassword: String = "",
     val code: String = "",
     val challengeToken: String = "",
     val verificationRequestId: String = "",
@@ -138,11 +142,13 @@ sealed interface AuthAction {
     data object Back : AuthAction
     data object Submit : AuthAction
     data object ResendCode : AuthAction
+    data object ForgotPassword : AuthAction
     data class UpdateName(val value: String) : AuthAction
     data class UpdateUsername(val value: String) : AuthAction
     data class UpdateEmail(val value: String) : AuthAction
     data class UpdatePassword(val value: String) : AuthAction
     data class UpdateCode(val value: String) : AuthAction
+    data class UpdateNewPassword(val value: String) : AuthAction
     data class SwitchToStoredAccount(val userId: Int) : AuthAction
 }
 
@@ -224,6 +230,9 @@ private val AuthStep.isRegistration: Boolean
     get() = this == AuthStep.RegisterName || this == AuthStep.RegisterUsername ||
         this == AuthStep.RegisterEmail || this == AuthStep.RegisterPassword
 
+private val AuthStep.isReset: Boolean
+    get() = this == AuthStep.ResetCode || this == AuthStep.ResetPassword
+
 private val AuthStep.isLogin: Boolean
     get() = this == AuthStep.LoginEmail || this == AuthStep.LoginPassword
 
@@ -239,6 +248,8 @@ private val AuthUiState.indicator: Pair<Int, Int>
         AuthStep.RegisterUsername -> 1 to 4
         AuthStep.RegisterEmail -> 2 to 4
         AuthStep.RegisterPassword -> 3 to 4
+        AuthStep.ResetCode -> 0 to 2
+        AuthStep.ResetPassword -> 1 to 2
         else -> 2 to 3
     }
 
@@ -263,6 +274,7 @@ private fun AuthTopBar(state: AuthUiState, onBack: () -> Unit) {
         Text(
             when {
                 state.step.isVerification -> "Проверка"
+                state.step.isReset -> "Новый пароль"
                 state.step.isRegistration -> "Регистрация"
                 else -> "Вход"
             },
@@ -292,8 +304,11 @@ private fun AuthStepContent(state: AuthUiState, onAction: (AuthAction) -> Unit) 
         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(state.step.title, color = AloNativeAppText, fontSize = 34.sp, fontWeight = FontWeight.Bold, lineHeight = 40.sp)
             Text(
-                if (state.step.isVerification) state.noticeMessage?.takeIf { it.isNotBlank() } ?: "Мы отправили код на указанную почту."
-                else state.step.subtitle,
+                when {
+                    state.step.isVerification -> state.noticeMessage?.takeIf { it.isNotBlank() } ?: "Мы отправили код на указанную почту."
+                    state.step == AuthStep.ResetCode -> "Введите код из письма, которое пришло на ${state.email}."
+                    else -> state.step.subtitle
+                },
                 color = AloNativeAppMuted, fontSize = 17.sp, lineHeight = 22.sp
             )
         }
@@ -302,8 +317,24 @@ private fun AuthStepContent(state: AuthUiState, onAction: (AuthAction) -> Unit) 
                 state.email, { onAction(AuthAction.UpdateEmail(it)) }, "name@example.com", KeyboardType.Email,
                 imeAction = ImeAction.Next, onSubmit = { onAction(AuthAction.Submit) }
             )
-            AuthStep.LoginPassword, AuthStep.RegisterPassword -> AuthField(
-                state.password, { onAction(AuthAction.UpdatePassword(it)) }, "Пароль", KeyboardType.Password,
+            AuthStep.LoginPassword, AuthStep.RegisterPassword -> {
+                AuthField(
+                    state.password, { onAction(AuthAction.UpdatePassword(it)) }, "Пароль", KeyboardType.Password,
+                    isPassword = true, imeAction = ImeAction.Done, onSubmit = { onAction(AuthAction.Submit) }
+                )
+                // The site's «Забыли пароль?» under the field: a code to the address entered on the step before.
+                if (state.step == AuthStep.LoginPassword) {
+                    Text(
+                        "Забыли пароль?",
+                        color = if (state.isSubmitting) AloNativeAppMuted else AloNativeAppAccent,
+                        fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.heightIn(min = 44.dp).clickable(enabled = !state.isSubmitting) { onAction(AuthAction.ForgotPassword) }
+                            .wrapContentHeight().semantics { contentDescription = "Забыли пароль?" }
+                    )
+                }
+            }
+            AuthStep.ResetPassword -> AuthField(
+                state.newPassword, { onAction(AuthAction.UpdateNewPassword(it)) }, "Новый пароль", KeyboardType.Password,
                 isPassword = true, imeAction = ImeAction.Done, onSubmit = { onAction(AuthAction.Submit) }
             )
             AuthStep.RegisterName -> AuthField(
@@ -314,7 +345,7 @@ private fun AuthStepContent(state: AuthUiState, onAction: (AuthAction) -> Unit) 
                 state.username, { onAction(AuthAction.UpdateUsername(it)) }, "username", KeyboardType.Ascii,
                 imeAction = ImeAction.Next, onSubmit = { onAction(AuthAction.Submit) }
             )
-            AuthStep.LoginCode, AuthStep.VerifyEmailCode -> {
+            AuthStep.LoginCode, AuthStep.VerifyEmailCode, AuthStep.ResetCode -> {
                 AuthField(
                     state.code, { onAction(AuthAction.UpdateCode(it)) }, "Код из письма", KeyboardType.NumberPassword,
                     imeAction = ImeAction.Done, onSubmit = { onAction(AuthAction.Submit) }
@@ -361,6 +392,8 @@ private val AuthStep.title: String
         AuthStep.RegisterPassword -> "Создайте пароль"
         AuthStep.LoginPassword -> "Введите пароль"
         AuthStep.LoginCode, AuthStep.VerifyEmailCode -> "Введите код"
+        AuthStep.ResetCode -> "Сброс пароля"
+        AuthStep.ResetPassword -> "Новый пароль"
         AuthStep.QrLogin -> "Вход по QR-коду"
         AuthStep.DeviceLinkWaiting -> "Подтвердите вход на другом устройстве"
     }
@@ -374,6 +407,8 @@ private val AuthStep.subtitle: String
         AuthStep.RegisterPassword -> "Минимум 8 символов."
         AuthStep.LoginPassword -> "После пароля подтвердим вход кодом из письма."
         AuthStep.LoginCode, AuthStep.VerifyEmailCode -> "Код отправлен на почту."
+        AuthStep.ResetCode -> "Введите код из письма."
+        AuthStep.ResetPassword -> "Минимум 8 символов. После смены пароля все устройства выйдут из аккаунта."
         AuthStep.QrLogin -> "Отсканируйте этот код в Alo на устройстве, где вы уже вошли: Настройки → Безопасность → «Подключить устройство». Подойдёт и обычная камера телефона."
         AuthStep.DeviceLinkWaiting -> "На устройстве, где вы уже вошли, появится запрос. Он действует 2 минуты."
     }
@@ -461,7 +496,8 @@ private fun AuthBottomActions(state: AuthUiState, onAction: (AuthAction) -> Unit
         AuthStep.LoginPassword, AuthStep.RegisterPassword -> state.password.length >= 8
         AuthStep.RegisterName -> state.name.isNotBlank()
         AuthStep.RegisterUsername -> state.username.isNotBlank()
-        AuthStep.LoginCode, AuthStep.VerifyEmailCode -> state.code.isNotBlank()
+        AuthStep.LoginCode, AuthStep.VerifyEmailCode, AuthStep.ResetCode -> state.code.isNotBlank()
+        AuthStep.ResetPassword -> state.newPassword.length >= 8
         AuthStep.QrLogin, AuthStep.DeviceLinkWaiting -> false
     }
     Column(
@@ -485,6 +521,7 @@ private fun AuthBottomActions(state: AuthUiState, onAction: (AuthAction) -> Unit
                     Text(
                         when {
                             step.isVerification -> "Продолжить"
+                            step == AuthStep.ResetPassword -> "Сменить пароль"
                             step == AuthStep.LoginPassword -> "Войти"
                             step == AuthStep.RegisterPassword -> "Создать аккаунт"
                             else -> "Продолжить"
@@ -495,7 +532,7 @@ private fun AuthBottomActions(state: AuthUiState, onAction: (AuthAction) -> Unit
                 }
             }
         }
-        if (!step.isVerification) {
+        if (!step.isVerification && !step.isReset) {
             if (step.isLogin) {
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     AuthTintedButton(Icons.Rounded.Key, "Ключ доступа", Modifier.weight(1f), enabled = !state.isSubmitting) { onAction(AuthAction.ChoosePasskey) }

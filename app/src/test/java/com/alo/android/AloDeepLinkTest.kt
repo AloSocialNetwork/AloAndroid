@@ -30,8 +30,18 @@ class AloDeepLinkTest {
         assertNull(parse("http://$host/p/42"))
         assertNull(parse("https://$host/p/42/extra"))
         assertNull(parse("https://$host/t/77/not-a-topic"))
-        assertNull(parse("https://$host/p/not-a-number"))
+        assertNull(parse("https://$host/p/not-a-code"))
+        assertNull(parse("https://$host/p/012345678901"))
         assertNull(parse("javascript:alert(1)"))
+    }
+
+    @Test
+    fun postLinksUseTheRandomCodeAndStillReadOldNumbers() {
+        assertEquals(AloDeepLinkTarget.PostCode("Ab3xY9kLm0Qz"), parse("https://$host/p/Ab3xY9kLm0Qz"))
+        assertEquals(AloDeepLinkTarget.PostCode("Ab3xY9kLm0Qz"), parse("alo://p/Ab3xY9kLm0Qz"))
+        assertEquals(AloDeepLinkTarget.Post(42), parse("https://$host/p/42"))
+        assertNull(parse("https://$host/p/short"))
+        assertEquals(false, AloDeepLinkTarget.isPostCode("../../x/abcde"))
     }
 
     private fun parse(value: String): AloDeepLinkTarget? =

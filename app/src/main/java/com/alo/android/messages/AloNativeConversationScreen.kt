@@ -113,6 +113,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Color
@@ -128,6 +129,7 @@ import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
@@ -190,6 +192,10 @@ internal fun MessagesConversationScreen(
     onClosePeerProfile: () -> Unit,
     onOpenPeerProfile: () -> Unit,
     onToggleChatMuted: () -> Unit,
+    onLoadChatMuted: () -> Unit = {},
+    /** Set when this group chat is a channel post's comments (Telegram): the post on top, «N комментариев» on top. */
+    commentsThread: AloCommentsThread? = null,
+    onJoinChannel: () -> Unit = {},
     onUpdateDirectChatAutoDelete: (Int, Int) -> Unit,
     onUpdateChatAppearance: (AloChatAppearance) -> Unit,
     onUpdateUserBlock: (Int, Boolean) -> Unit,
@@ -217,6 +223,8 @@ internal fun MessagesConversationScreen(
     onStopRecording: (Boolean) -> Unit,
     onSendRecording: () -> Unit = {},
     onCompleteVideoCircleRecording: (String, Int) -> Unit,
+    /** A circle released on the mic: recorded and sent at once (Telegram). */
+    onSendVideoCircleRecording: (String, Int) -> Unit = { _, _ -> },
     onDiscardDraft: () -> Unit,
     onRemoveDraftAttachment: (String) -> Unit,
     onSelfDestructSecondsChange: (Int) -> Unit,
@@ -313,7 +321,8 @@ internal fun MessagesConversationScreen(
     }
     fun canDeleteMessageForEveryone(message: AloChatMessage): Boolean {
         if (message.id <= 0) return false
-        if (detail?.kind != "group" && (detail?.roomId ?: 0) <= 0) return true
+        // A private chat: only the author removes a message for both (the server refuses the rest).
+        if (detail?.kind != "group" && (detail?.roomId ?: 0) <= 0) return message.senderId == me.id
         if (message.senderId == me.id) return true
         return hasAdministrativeRight("deleteMessages")
     }
@@ -374,7 +383,7 @@ internal fun MessagesConversationScreen(
     var isForumSearchVisible by rememberSaveable(conversationRoomKey) { mutableStateOf(false) }
     var forumSearchText by rememberSaveable(conversationRoomKey, activeForumTopicId) { mutableStateOf("") }
     val forumSelectorVisible = detail?.groupPolicy?.isForum == true &&
-        !detail.forumTopics.isNullOrEmpty()
+        !detail.forumTopics.isNullOrEmpty() && commentsThread == null
     val forumSelectorHeight = if (forumSelectorVisible) {
         if (isForumSearchVisible) 84.dp else 42.dp
     } else {
@@ -413,6 +422,9 @@ internal fun MessagesConversationScreen(
         pinnedBarHeight + forumSelectorHeight + voiceBarHeight + musicBarHeight
     // The wallpaper and the message list, blurred under the header and composer glass.
     val chatBackdrop = rememberAloGlassBackdrop()
+    // The composer's held mic and the camera overlay of a circle being recorded.
+    val circleControl = remember { AloCircleRecordingControl() }
+    val recordingCircle = recorderMode == AloChatRecordMode.VideoCircle && captureState == AloChatCaptureState.Recording
     val composerOverlayHeight = if (bottomPanelVisible) 68.dp else 80.dp
     val messagesBottomPadding = composerOverlayHeight + composerSystemBottomPadding
     // The composer's real height (it grows with a reply bar, attachments or several lines): the jump button rides just above it, as Telegram's does.
@@ -489,6 +501,8 @@ internal fun MessagesConversationScreen(
     var suppressPeerProfileExitAnimation by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val isSelectionMode = selectedMessages.isNotEmpty()
+    // The post on top of its comments is the list's first row: message N is list row N + this.
+    val listHeaderItems = if (commentsThread?.post != null) 1 else 0
     val firstVisibleMessageIndex by remember {
         derivedStateOf { messagesListState.firstVisibleItemIndex }
     }
@@ -588,7 +602,7 @@ internal fun MessagesConversationScreen(
         if (index < 0) return
         scope.launch {
             val viewport = messagesListState.layoutInfo.viewportSize.height
-            messagesListState.animateScrollToItem(index, scrollOffset = -viewport / 3)
+            messagesListState.animateScrollToItem(index + listHeaderItems, scrollOffset = -viewport / 3)
             highlightedMessage = messageId to ((highlightedMessage?.second ?: 0) + 1)
         }
     }
@@ -628,17 +642,18 @@ internal fun MessagesConversationScreen(
         }
     }
 
-    LaunchedEffect(firstVisibleMessageIndex, visibleMessages) {
-        visibleMessages.getOrNull(firstVisibleMessageIndex)?.let { message ->
+    LaunchedEffect(firstVisibleMessageIndex, visibleMessages, listHeaderItems) {
+        visibleMessages.getOrNull(firstVisibleMessageIndex - listHeaderItems)?.let { message ->
             floatingDateLabel = formatMessageDateLabel(message.createdAt)
         }
     }
 
     // The list's own day pill sits at the top edge when its day has just begun there: the floating copy would draw over it a few pixels off.
-    val floatingDateCoincides by remember(visibleMessages) {
+    val floatingDateCoincides by remember(visibleMessages, listHeaderItems) {
         derivedStateOf {
-            val first = visibleMessages.getOrNull(messagesListState.firstVisibleItemIndex) ?: return@derivedStateOf false
-            val previous = visibleMessages.getOrNull(messagesListState.firstVisibleItemIndex - 1)
+            val firstIndex = messagesListState.firstVisibleItemIndex - listHeaderItems
+            val first = visibleMessages.getOrNull(firstIndex) ?: return@derivedStateOf false
+            val previous = visibleMessages.getOrNull(firstIndex - 1)
             val startsDay = previous == null || formatMessageDayKey(previous.createdAt) != formatMessageDayKey(first.createdAt)
             startsDay && messagesListState.firstVisibleItemScrollOffset < 60
         }
@@ -653,6 +668,15 @@ internal fun MessagesConversationScreen(
         }
     }
 
+    // The channel bar «Убрать звук» / «Включить звук» shows the server's mute state of this channel.
+    var profileOpensSearch by remember(detail?.peerId) { mutableStateOf(false) }
+    val showsChannelBar = isChannelConversation && !canComposeMessages && detail?.isMember != false
+    LaunchedEffect(detail?.peerId, showsChannelBar) {
+        if (showsChannelBar) onLoadChatMuted()
+    }
+    LaunchedEffect(showPeerProfile) {
+        if (!showPeerProfile) profileOpensSearch = false
+    }
     LaunchedEffect(showPeerProfile) {
         if (showPeerProfile) {
             suppressPeerProfileExitAnimation = false
@@ -892,7 +916,7 @@ internal fun MessagesConversationScreen(
                             activeForumTopicId
                         ) {
                             if (visibleMessages.isNotEmpty()) {
-                                messagesListState.scrollToItem(visibleMessages.lastIndex)
+                                messagesListState.scrollToItem(visibleMessages.lastIndex + listHeaderItems)
                                 previousItemsCount = visibleMessages.size
                                 wasNearBottomBeforeIme = true
                             }
@@ -902,7 +926,7 @@ internal fun MessagesConversationScreen(
                                 val lastMessage = visibleMessages.lastOrNull()
                                 val shouldFollowNewMessage = lastMessage?.senderId == me.id || isNearMessageListBottom
                                 if (shouldFollowNewMessage) {
-                                    messagesListState.aloScrollToNewMessage(visibleMessages.size)
+                                    messagesListState.aloScrollToNewMessage(visibleMessages.size + listHeaderItems)
                                 } else {
                                     unseenBelow += visibleMessages.size - previousItemsCount
                                 }
@@ -913,7 +937,7 @@ internal fun MessagesConversationScreen(
                         // view while the keyboard opens.
                         LaunchedEffect(imeBottomPx) {
                             if (imeBottomPx > 0 && visibleMessages.isNotEmpty() && wasNearBottomBeforeIme) {
-                                messagesListState.scrollToItem(visibleMessages.lastIndex)
+                                messagesListState.scrollToItem(visibleMessages.lastIndex + listHeaderItems)
                             }
                         }
                         AnimatedContent(
@@ -936,6 +960,7 @@ internal fun MessagesConversationScreen(
                                 currentAppearance = chatAppearance,
                                 isMuted = isChatMuted,
                                 isPeerBlocked = isPeerBlocked,
+                                startsWithSearch = profileOpensSearch,
                                 onBack = onClosePeerProfile,
                                 onInteractiveBack = {
                                     suppressPeerProfileExitAnimation = true
@@ -1013,6 +1038,11 @@ internal fun MessagesConversationScreen(
                                         // Each message brings its own gap above it: the chat's spacing between runs, a closer one inside a run.
                                         verticalArrangement = Arrangement.Bottom
                                     ) {
+                                        commentsThread?.post?.let { threadPost ->
+                                            item(key = "comments-thread-post") {
+                                                CommentsThreadPostHeader(post = threadPost, hasComments = visibleMessages.isNotEmpty(), bubbleColor = AloNativeChatIncoming)
+                                            }
+                                        }
                                         itemsIndexed(visibleMessages, key = { index, message -> messageKeys.getOrNull(index) ?: message.id }) { index, message ->
                                             val messageEnter = messageEnterState.enterFor(messageKeys.getOrNull(index) ?: message.id)
                                             // Telegram's ChatListItemAnimator: rows shift in 250ms on its chat curve;
@@ -1059,6 +1089,7 @@ internal fun MessagesConversationScreen(
                                                 if (
                                                     detail.groupPolicy?.isForum == true &&
                                                     message.topicId > 0 &&
+                                                    commentsThread == null &&
                                                     (
                                                         index == 0 ||
                                                             visibleMessages[index - 1].topicId != message.topicId
@@ -1225,6 +1256,7 @@ internal fun MessagesConversationScreen(
                                         AloStickyRunAvatars(
                                             listState = messagesListState,
                                             messages = visibleMessages,
+                                            listHeaderItems = listHeaderItems,
                                             meId = me.id,
                                             dayOf = { formatMessageDayKey(it.createdAt) },
                                             onOpenProfile = onOpenProfile
@@ -1269,8 +1301,7 @@ internal fun MessagesConversationScreen(
                     if (
                         detail != null &&
                         !showPeerProfile &&
-                        !isAttachmentSheetOpen &&
-                        !(recorderMode == AloChatRecordMode.VideoCircle && captureState == AloChatCaptureState.Recording)
+                        !isAttachmentSheetOpen
                     ) {
                         if (isPeerBlocked) {
                             BlockedPeerComposer(
@@ -1323,8 +1354,17 @@ internal fun MessagesConversationScreen(
                                 draftAttachments = draftAttachments,
                                 onToggleRecorderMode = onToggleRecorderMode,
                                 onStartRecording = onStartRecording,
-                                onStopRecording = onStopRecording,
-                                onSendRecording = onSendRecording,
+                                onStopRecording = { cancel ->
+                                    if (recordingCircle) {
+                                        circleControl.send(if (cancel) AloCircleCommand.Cancel else AloCircleCommand.Preview)
+                                    } else {
+                                        onStopRecording(cancel)
+                                    }
+                                },
+                                onSendRecording = {
+                                    if (recordingCircle) circleControl.send(AloCircleCommand.Send) else onSendRecording()
+                                },
+                                onRecordingHeldChange = { circleControl.isHeld = it },
                                 onDiscardDraft = onDiscardDraft,
                                 onRemoveDraftAttachment = onRemoveDraftAttachment,
                                 onSelfDestructSecondsChange = onSelfDestructSecondsChange,
@@ -1339,6 +1379,24 @@ internal fun MessagesConversationScreen(
                                 onFieldTapped = ::closeExpressionPanelForKeyboard
                             )
                             }
+                        } else if (isChannelConversation) {
+                            ChannelSubscriberBar(
+                                isMuted = isChatMuted,
+                                isMember = detail?.isMember != false,
+                                giftRecipient = detail?.members?.firstOrNull { it.role == "owner" }?.let { it.user.id to it.user.name },
+                                onJoin = onJoinChannel,
+                                onToggleMuted = onToggleChatMuted,
+                                onSearch = {
+                                    profileOpensSearch = true
+                                    onOpenPeerProfile()
+                                },
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .zIndex(4f)
+                                    .fillMaxWidth()
+                                    .padding(bottom = composerSystemBottomPadding)
+                                    .onSizeChanged { composerHeightPx = it.height }
+                            )
                         } else {
                             ChannelReadOnlyComposer(
                                 modifier = Modifier
@@ -1414,6 +1472,8 @@ internal fun MessagesConversationScreen(
                         ) {
                             MessagesChatHeader(
                                 detail = detail,
+                                threadTitle = commentsThread?.let { aloCommentsTitle(visibleMessages.count { it.id > 0 }) },
+                                threadSubtitle = commentsThread?.post?.author?.name,
                                 isLoading = isLoading,
                                 isOfflineCached = isOfflineCached,
                                 isPeerBlocked = isPeerBlocked,
@@ -1585,6 +1645,18 @@ internal fun MessagesConversationScreen(
                                 end = AloChatOverlayMetrics.SideInset
                             ),
                             onOpenMessage = { jumpToMessage(it) }
+                        )
+                    }
+
+                    // Under the composer (zIndex 4), as Telegram puts the round camera between the chat and the input panel.
+                    if (!showPeerProfile && recorderMode == AloChatRecordMode.VideoCircle && captureState == AloChatCaptureState.Recording) {
+                        VideoCircleRecorderOverlay(
+                            bottomInset = composerOverlayHeight,
+                            onCancel = { onStopRecording(true) },
+                            onRecorded = onCompleteVideoCircleRecording,
+                            onRecordedSend = onSendVideoCircleRecording,
+                            control = circleControl,
+                            backdrop = chatBackdrop
                         )
                     }
 
@@ -1800,15 +1872,126 @@ internal fun MessagesConversationScreen(
                         )
                     }
 
-                    if (!showPeerProfile && recorderMode == AloChatRecordMode.VideoCircle && captureState == AloChatCaptureState.Recording) {
-                        VideoCircleRecorderOverlay(
-                            bottomInset = composerOverlayHeight,
-                            onCancel = { onStopRecording(true) },
-                            onRecorded = onCompleteVideoCircleRecording
-                        )
-                    }
                 }
             }
+        }
+    }
+}
+
+/**
+ * A subscriber's bar under a channel, as in Telegram (ChatChannelSubscriberInputPanelNode, same numbers on every Alo
+ * client): a glass capsule at least 165dp wide and 40dp tall with «Убрать звук» / «Включить звук» (17sp medium),
+ * centred on the screen, and a 40dp round search button on the right.
+ */
+@Composable
+private fun ChannelSubscriberBar(
+    isMuted: Boolean,
+    onToggleMuted: () -> Unit,
+    onSearch: () -> Unit,
+    modifier: Modifier = Modifier,
+    isMember: Boolean = true,
+    /** The channel's author (id, name): the gift button gives them Alo Премиум, shown once Премиум is on. */
+    giftRecipient: Pair<Int, String>? = null,
+    onJoin: () -> Unit = {}
+) {
+    var giftOpen by remember { mutableStateOf(false) }
+    if (giftOpen && giftRecipient != null) {
+        val context = LocalContext.current
+        val giftApi = remember { AloApiClient(baseUrl = AloServerConfiguration.apiBaseUrl, applicationContext = context.applicationContext) }
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = { giftOpen = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(Modifier.fillMaxSize().background(AloNativeAppBackground)) {
+                AloPremiumSettingsPage(api = giftApi, onOpenLook = {}, giftRecipient = giftRecipient)
+                Text(
+                    "Закрыть",
+                    color = AloNativeAppAccent,
+                    fontSize = 17.sp,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).clickable { giftOpen = false }
+                )
+            }
+        }
+    }
+    Box(
+        modifier = modifier
+            .padding(horizontal = 10.dp, vertical = 6.dp)
+            .heightIn(min = 44.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        if (giftRecipient != null && AloPremiumDirectory.enabled) {
+            AloNativeGlassPanel(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(40.dp)
+                    .clip(CircleShape)
+                    .clickable { giftOpen = true },
+                shape = CircleShape
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.CardGiftcard,
+                    contentDescription = "Подарить Премиум автору",
+                    tint = AloNativeAppText,
+                    modifier = Modifier.align(Alignment.Center).size(24.dp)
+                )
+            }
+        }
+        if (!isMember) {
+            // A channel read before subscribing: «Подписаться» in the accent colour (Telegram's join panel).
+            Box(
+                modifier = Modifier
+                    .padding(horizontal = 48.dp)
+                    .heightIn(min = 40.dp)
+                    .widthIn(min = 165.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(AloNativeAppAccent)
+                    .clickable(onClick = onJoin),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Подписаться",
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 9.dp)
+                )
+            }
+        } else
+        AloNativeGlassPanel(
+            modifier = Modifier
+                .padding(horizontal = 48.dp)
+                .heightIn(min = 40.dp)
+                .widthIn(min = 165.dp)
+                .clip(RoundedCornerShape(50))
+                .clickable(onClick = onToggleMuted),
+            shape = RoundedCornerShape(50)
+        ) {
+            Text(
+                text = if (isMuted) "Включить звук" else "Убрать звук",
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Medium,
+                color = AloNativeAppText,
+                maxLines = 1,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .padding(horizontal = 10.dp, vertical = 9.dp)
+            )
+        }
+        AloNativeGlassPanel(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .size(40.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onSearch),
+            shape = CircleShape
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Search,
+                contentDescription = "Поиск по каналу",
+                tint = AloNativeAppText,
+                modifier = Modifier.align(Alignment.Center).size(24.dp)
+            )
         }
     }
 }
@@ -2161,6 +2344,8 @@ private fun ForumTopicPill(topic: AloForumTopic) {
 @Composable
 private fun MessagesChatHeader(
     detail: AloConversationDetail?,
+    threadTitle: String? = null,
+    threadSubtitle: String? = null,
     isLoading: Boolean,
     isOfflineCached: Boolean,
     isPeerBlocked: Boolean,
@@ -2218,7 +2403,8 @@ private fun MessagesChatHeader(
                 AloChevronLeft(21.dp, AloNativeAppText, Modifier.semantics { contentDescription = "Назад к чатам" }, AloChevronWeight.Regular)
             }
         }
-        Box(Modifier.weight(1f)) {
+        // The capsule hugs its text, centred on the screen, as on the iPhone and the site; a long title stops at the buttons.
+        Box(Modifier.weight(1f), contentAlignment = Alignment.Center) {
             AloNativeGlassPanel(
                 modifier = Modifier.graphicsLayer {
                     scaleX = headerScale
@@ -2228,7 +2414,6 @@ private fun MessagesChatHeader(
             ) {
                 Column(
                     modifier = Modifier
-                        .fillMaxWidth()
                         .height(itemSize)
                         .combinedClickable(
                             interactionSource = headerInteraction,
@@ -2241,16 +2426,27 @@ private fun MessagesChatHeader(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
-                    Text(
-                        text = detail?.title ?: "Загрузка чата",
-                        fontSize = 18.sp,
-                        lineHeight = 21.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = AloNativeAppText,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    // Alo Премиум: the person's colour, then the star or the emoji status (direct chats only).
+                    val premiumId = if (detail != null && detail.roomId == 0 && detail.kind != "group" && detail.entityType !in setOf("channel", "saved")) detail.peerId else 0
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        AloPremiumName(
+                            text = threadTitle ?: detail?.title ?: "Загрузка чата",
+                            userId = premiumId,
+                            fontSize = 18.sp,
+                            lineHeight = 21.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        AloPremiumMark(premiumId, 16.dp)
+                    }
                     when {
+                        threadTitle != null -> Text(
+                            text = threadSubtitle.orEmpty(),
+                            style = AloChatHeaderSubtitleStyle,
+                            color = AloNativeAppMuted,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         isOfflineCached && detail?.kind != "group" -> ConnectingSubtitle()
                         detail?.isTyping == true -> TypingSubtitle(action = detail.typingAction)
                         else -> Text(
@@ -2378,7 +2574,27 @@ internal fun ChatWallpaperBackground(modifier: Modifier = Modifier) {
         }
     }
     val backgroundBrush = chatWallpaperGradient(appearance.gradientStyle, gradientColors)
-    Box(modifier = modifier.background(backgroundBrush)) {
+    // The stock dark chat is the website's and the iPhone's (web/css/chat.css `.chat-wall`): #050810 with a blue glow
+    // at the top right and a violet one at the bottom left, the doodles in light blue at 10 %.
+    val webClassic = !lightTheme && neutralDarkWallpaper && appearance.wallpaper.lowercase(Locale.getDefault()) == "classic"
+    Box(modifier = modifier.background(if (webClassic) Brush.verticalGradient(listOf(Color(0xFF050810), Color(0xFF050810))) else backgroundBrush)) {
+        if (webClassic) Canvas(modifier = Modifier.matchParentSize()) {
+            val glowRadius = 0.6f * maxOf(size.width * 1.2f, size.height * 0.7f)
+            drawRect(
+                Brush.radialGradient(
+                    colors = listOf(Color(23, 125, 255, (0.16f * 255).toInt()), Color.Transparent),
+                    center = Offset(size.width * 0.85f, -size.height * 0.10f),
+                    radius = glowRadius
+                )
+            )
+            drawRect(
+                Brush.radialGradient(
+                    colors = listOf(Color(120, 90, 255, (0.10f * 255).toInt()), Color.Transparent),
+                    center = Offset(0f, size.height),
+                    radius = 0.6f * maxOf(size.width * 0.9f, size.height * 0.6f)
+                )
+            )
+        }
         if (pattern != null) Canvas(modifier = Modifier.matchParentSize()) {
             val scale = maxOf(
                 size.width / pattern.width.toFloat(),
@@ -2396,9 +2612,16 @@ internal fun ChatWallpaperBackground(modifier: Modifier = Modifier) {
                     y = ((size.height - destinationHeight) / 2f).roundToInt()
                 ),
                 dstSize = IntSize(destinationWidth, destinationHeight),
-                alpha = appearance.patternIntensity.coerceIn(0.03f, 0.18f) * (if (lightTheme) 1.5f else 1f),
-                // The line art is white on the dark wallpaper and a soft ink on the light one.
-                colorFilter = ColorFilter.tint(if (lightTheme) Color(0xFF3E5A78) else Color.White, BlendMode.SrcIn)
+                alpha = if (webClassic) 0.10f else appearance.patternIntensity.coerceIn(0.03f, 0.18f) * (if (lightTheme) 1.5f else 1f),
+                // The line art is white on the dark wallpaper and a soft ink on the light one; light blue on the website's look.
+                colorFilter = ColorFilter.tint(
+                    when {
+                        lightTheme -> Color(0xFF3E5A78)
+                        webClassic -> Color(130, 175, 255)
+                        else -> Color.White
+                    },
+                    BlendMode.SrcIn
+                )
             )
         }
     }
@@ -2947,6 +3170,74 @@ private fun MessagesSelectionHeader(
                     )
                 }
             }
+        }
+    }
+}
+
+/** «N комментариев» (or «Комментарии» before the first one), the title of a channel post's comments. */
+internal fun aloCommentsTitle(count: Int): String {
+    if (count <= 0) return "Комментарии"
+    val word = when {
+        count % 100 in 11..14 -> "комментариев"
+        count % 10 == 1 -> "комментарий"
+        count % 10 in 2..4 -> "комментария"
+        else -> "комментариев"
+    }
+    return "$count $word"
+}
+
+/** The post on top of its comments, as Telegram shows it: the channel's bubble, then «Начало обсуждения». */
+@Composable
+private fun CommentsThreadPostHeader(post: AloPost, hasComments: Boolean, bubbleColor: Color) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            AvatarBadge(
+                name = post.author.name,
+                avatarUrl = post.author.avatarUrl,
+                verified = false,
+                size = 34.dp,
+                colorSeed = post.author.id.toString()
+            )
+            Column(
+                modifier = Modifier
+                    .widthIn(max = 300.dp)
+                    .clip(AloSquircle(18.dp))
+                    .background(bubbleColor)
+                    .padding(horizontal = 11.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(post.author.name, color = AloNativeAppAccent, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                if (post.body.isNotBlank()) {
+                    Text(post.body, color = AloNativeAppText, fontSize = 16.sp, lineHeight = 21.sp)
+                }
+                Text(
+                    formatMessageTime(post.createdAt),
+                    color = AloNativeAppMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.align(Alignment.End)
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.Black.copy(alpha = 0.32f))
+                .padding(horizontal = 11.dp, vertical = 5.dp)
+        ) {
+            Text(
+                if (hasComments) "Начало обсуждения" else "Комментариев пока нет",
+                color = Color.White,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
     }
 }

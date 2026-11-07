@@ -355,9 +355,26 @@ private fun AloNativeAppScreenContent(
                         AloBottomBar(
                             modifier = Modifier.align(Alignment.BottomCenter),
                             activeTab = state.activeTab,
-                            onSelect = { tab -> onAction(AloNativeAppAction.SelectTab(tab)) }
+                            onSelect = { tab -> onAction(AloNativeAppAction.SelectTab(tab)) },
+                            profileBadge = state.accountUnread.values.sum(),
+                            onProfileLongPress = { onAction(AloNativeAppAction.OpenAccountSwitcher) }
                         )
                     }
+                }
+
+                if (data != null && state.isAccountSwitcherOpen) {
+                    AloAccountSwitcherSheet(
+                        me = data.me,
+                        accounts = state.savedAccounts,
+                        unread = state.accountUnread,
+                        onSwitch = { onAction(AloNativeAppAction.SwitchSecurityAccount(it)) },
+                        onAdd = { onAction(AloNativeAppAction.AddAnotherAccount) },
+                        onOpenProfile = {
+                            onAction(AloNativeAppAction.CloseAccountSwitcher)
+                            onAction(AloNativeAppAction.SelectTab(AloAppTab.Profile))
+                        },
+                        onDismiss = { onAction(AloNativeAppAction.CloseAccountSwitcher) }
+                    )
                 }
 
                 if (data != null && profileEditorOpen) {
@@ -372,7 +389,7 @@ private fun AloNativeAppScreenContent(
                         notificationSettings = data.notificationSettings,
                         privacySettings = data.privacySettings,
                         blockedUserIds = state.blockedUserIds,
-                        blockedUserPeers = data.messagesConversations.map { it.peer },
+                        blockedUserPeers = state.blockedUserPeers + data.messagesConversations.map { it.peer },
                         blockActionUserId = state.blockActionUserId,
                         themeMode = state.themeMode,
                         isRefreshing = state.isRefreshing,
@@ -381,6 +398,7 @@ private fun AloNativeAppScreenContent(
                         isSecurityLoading = state.isSecuritySessionsLoading,
                         securityNotice = state.securityNotice,
                         savedAccounts = state.savedAccounts,
+                        accountUnread = state.accountUnread,
                         isAccountSecurityLoading = state.isAccountSecurityLoading,
                         passkeys = state.passkeys,
                         isPasskeyLoading = state.isPasskeyLoading,
@@ -623,7 +641,9 @@ private fun AloNativeAppScreenContent(
                             onAction(AloNativeAppAction.UpdateUserBlock(userId, blocked))
                         },
                         onPrimaryAction = { profile ->
-                            if (profile.kind == "user") {
+                            if (profile.kind == "channel") {
+                                onAction(AloNativeAppAction.ToggleChannelSubscription(profile.id))
+                            } else if (profile.kind == "user") {
                                 // The hero has asked already before «В друзьях» / «Заявка отправлена» are undone.
                                 when (profile.friendStatus) {
                                     "incoming" -> {
@@ -662,6 +682,7 @@ private fun AloNativeAppScreenContent(
                                     }
                                 }
                                 "group" -> onAction(AloNativeAppAction.SelectConversation(profile.id))
+                                "channel" -> if (profile.messengerRoomId > 0) onAction(AloNativeAppAction.OpenChannelChat(profile.messengerRoomId))
                             }
                         }
                     )
@@ -1477,6 +1498,9 @@ private fun MessagesScreen(
                     },
                     onOpenPeerProfile = { onAction(AloNativeAppAction.OpenChatPeerProfile) },
                     onToggleChatMuted = { onAction(AloNativeAppAction.ToggleActiveChatMuted) },
+                    onLoadChatMuted = { onAction(AloNativeAppAction.LoadActiveChatMuted) },
+                    commentsThread = state.commentsThread?.takeIf { it.roomId == state.activeConversation?.roomId },
+                    onJoinChannel = { onAction(AloNativeAppAction.JoinPreviewedChannel) },
                     onUpdateDirectChatAutoDelete = { peerId, seconds ->
                         onAction(AloNativeAppAction.UpdateDirectChatAutoDelete(peerId, seconds))
                     },
@@ -1529,6 +1553,9 @@ private fun MessagesScreen(
                     onSendRecording = { onAction(AloNativeAppAction.StopMessageRecording(cancel = false, send = true)) },
                     onCompleteVideoCircleRecording = { uri, durationSec ->
                         onAction(AloNativeAppAction.CompleteVideoCircleRecording(uri, durationSec))
+                    },
+                    onSendVideoCircleRecording = { uri, durationSec ->
+                        onAction(AloNativeAppAction.CompleteVideoCircleRecording(uri, durationSec, send = true))
                     },
                     onDiscardDraft = { onAction(AloNativeAppAction.DiscardMessageDraft) },
                     onRemoveDraftAttachment = { localUri ->

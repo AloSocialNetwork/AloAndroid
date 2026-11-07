@@ -298,6 +298,8 @@ class MainActivity : ComponentActivity() {
     private var pendingHumanChallengeRetry: ((String) -> Unit)? = null
     private var isProcessingDeepLink = false
     private var isProcessingPushOpen = false
+    /** A tapped push of another account saved on this phone: the app switches to it, then opens the push there. */
+    private var pendingPushAccountId = 0
     private val pushOpenStore by lazy { AloPendingPushOpenStore(appPrefs) }
     /** Set in debug builds started with [AloDesignFixture.EXTRA]: the app runs on fixtures, offline. */
     private var designPreview: String? = null
@@ -559,6 +561,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         AloMessageNotifications.cancelAllCalls(applicationContext)
+        if (rootScreen == RootScreen.App) refreshAccountSummaries()
         appState.activeConversation?.takeIf { appState.activeConversationPeerId == it.peerId && chatPresenceJob?.isActive != true }
             ?.let(::startActiveConversationRefresh)
     }
@@ -852,6 +855,8 @@ class MainActivity : ComponentActivity() {
             appState = AloNativeAppUiState(themeMode = savedThemeMode)
             authState = AuthUiState(noticeMessage = "Вы вышли из аккаунта.", savedAccounts = secureAccountStore.accounts())
             rootScreen = RootScreen.Auth
+            // As in Telegram: the next account saved on this phone opens instead of the sign-in screen.
+            secureAccountStore.accounts().firstOrNull()?.let { switchSecurityAccount(it.userId) }
         }
     }
 
@@ -888,6 +893,8 @@ class MainActivity : ComponentActivity() {
             AuthAction.Back -> navigateBack()
             AuthAction.Submit -> submitCurrentStep()
             AuthAction.ResendCode -> resendCode()
+            AuthAction.ForgotPassword -> requestPasswordReset()
+            is AuthAction.UpdateNewPassword -> updateAuthState { copy(newPassword = action.value) }
             is AuthAction.UpdateName -> updateAuthState { copy(name = action.value) }
             is AuthAction.UpdateUsername -> updateAuthState { copy(username = action.value) }
             is AuthAction.UpdateEmail -> updateAuthState { copy(email = action.value) }
@@ -916,7 +923,7 @@ class MainActivity : ComponentActivity() {
             is AloNativeAppAction.StartSecretRecording -> startSecretRecording(action.mode)
             is AloNativeAppAction.StopSecretRecording -> stopSecretRecording(action.cancel, action.send)
             is AloNativeAppAction.CompleteSecretCircleRecording ->
-                completeSecretCircleRecording(action.localUri, action.durationSec)
+                completeSecretCircleRecording(action.localUri, action.durationSec, action.send)
             AloNativeAppAction.OpenNotificationSettings -> appState = appState.copy(isProfileSettingsOpen = true, profileSettingsStartPage = "Notifications")
             AloNativeAppAction.OpenProfileSettings -> {
                 appState = appState.copy(isProfileSettingsOpen = true, profileSettingsStartPage = "Root")
@@ -985,6 +992,53 @@ class MainActivity : ComponentActivity() {
                 )
             }
             AloNativeAppAction.ToggleActiveChatMuted -> toggleActiveChatMuted()
+            AloNativeAppAction.JoinPreviewedChannel -> {
+                val conversation = appState.activeConversation
+                if (conversation != null && !conversation.isMember && conversation.feedChannelId > 0) {
+                    lifecycleScope.launch {
+                        try {
+                            apiClient.toggleChannelSubscription(conversation.feedChannelId)
+                            openNativeConversation(appState.activeConversationPeerId)
+                            loadNativeApp(isInitial = false)
+                            Toast.makeText(this@MainActivity, "Вы подписались на канал.", Toast.LENGTH_SHORT).show()
+                        } catch (error: AloApiException) {
+                            if (error.status == 401) handleSessionExpired() else appState = appState.copy(errorMessage = error.message)
+                        } catch (_error: Exception) {
+                            appState = appState.copy(errorMessage = "Не удалось подписаться.")
+                        }
+                    }
+                }
+            }
+            is AloNativeAppAction.OpenChannelChat -> {
+                if (action.roomId > 0) {
+                    messageDraftStore.persistFrom(appState)
+                    stopActiveRecordingForNavigation()
+                    appState = appState.copy(
+                        activeTab = AloAppTab.Messages,
+                        activeViewedProfileTarget = null,
+                        viewedProfile = null,
+                        isViewedProfileLoading = false,
+                        activeMedia = null
+                    )
+                    openNativeConversation(1_000_000_000 + action.roomId, fallbackKind = "group", fallbackRoomId = action.roomId)
+                }
+            }
+            is AloNativeAppAction.ToggleChannelSubscription -> {
+                lifecycleScope.launch {
+                    try {
+                        val subscribed = apiClient.toggleChannelSubscription(action.channelId)
+                        appState.viewedProfile?.takeIf { it.kind == "channel" && it.id == action.channelId }?.let { profile ->
+                            appState = appState.copy(viewedProfile = profile.copy(following = subscribed))
+                        }
+                        loadNativeApp(isInitial = false)
+                    } catch (error: AloApiException) {
+                        if (error.status == 401) handleSessionExpired() else appState = appState.copy(errorMessage = error.message)
+                    } catch (_error: Exception) {
+                        appState = appState.copy(errorMessage = "Не удалось изменить подписку.")
+                    }
+                }
+            }
+            AloNativeAppAction.LoadActiveChatMuted -> loadActiveChatMuteState()
             is AloNativeAppAction.UpdateDirectChatAutoDelete -> updateDirectChatAutoDelete(action.peerId, action.seconds)
             is AloNativeAppAction.UpdateUserBlock -> updateUserBlock(action.userId, action.blocked)
             is AloNativeAppAction.OpenComments -> openPostComments(action.postId)
@@ -1020,12 +1074,23 @@ class MainActivity : ComponentActivity() {
             is AloNativeAppAction.RevokeSecuritySession -> revokeSecuritySession(action.sessionId)
             AloNativeAppAction.RevokeOtherSecuritySessions -> revokeOtherSecuritySessions()
             AloNativeAppAction.LoadSecurityAccounts -> loadSecurityAccounts()
-            is AloNativeAppAction.SwitchSecurityAccount -> switchSecurityAccount(action.userId)
+            is AloNativeAppAction.SwitchSecurityAccount -> {
+                appState = appState.copy(isAccountSwitcherOpen = false)
+                switchSecurityAccount(action.userId)
+            }
             AloNativeAppAction.LoadPasskeys -> loadPasskeys()
             AloNativeAppAction.RegisterPasskey -> registerPasskey()
             AloNativeAppAction.AuthenticateWithPasskey -> authenticateWithPasskey()
             AloNativeAppAction.OpenQrLoginScanner -> openQrLoginScanner()
-            AloNativeAppAction.AddAnotherAccount -> addAnotherAccount()
+            AloNativeAppAction.AddAnotherAccount -> {
+                appState = appState.copy(isAccountSwitcherOpen = false)
+                addAnotherAccount()
+            }
+            AloNativeAppAction.OpenAccountSwitcher -> {
+                appState = appState.copy(isAccountSwitcherOpen = true, savedAccounts = secureAccountStore.accounts())
+                refreshAccountSummaries()
+            }
+            AloNativeAppAction.CloseAccountSwitcher -> appState = appState.copy(isAccountSwitcherOpen = false)
             AloNativeAppAction.CloseQrLoginScanner -> appState = appState.copy(isQrScannerOpen = false)
             is AloNativeAppAction.ApproveQrLoginPayload -> approveQrLoginPayload(action.rawPayload)
             AloNativeAppAction.ConfirmQrLogin -> confirmQrLogin()
@@ -1162,7 +1227,7 @@ class MainActivity : ComponentActivity() {
                 stopMessageRecording(action.cancel)
                 if (action.send && !action.cancel && appState.messageDraftAttachment != null) sendMessageDraft()
             }
-            is AloNativeAppAction.CompleteVideoCircleRecording -> completeVideoCircleRecording(action.localUri, action.durationSec)
+            is AloNativeAppAction.CompleteVideoCircleRecording -> completeVideoCircleRecording(action.localUri, action.durationSec, action.send)
             AloNativeAppAction.DiscardMessageDraft -> discardMessageDraft()
             is AloNativeAppAction.RemoveMessageDraftAttachment -> removeMessageDraftAttachment(action.localUri)
             is AloNativeAppAction.SendCatalogExpression -> sendCatalogExpression(action.media)
@@ -1611,6 +1676,26 @@ class MainActivity : ComponentActivity() {
                 openNativeConversation(action.userId, fallbackKind = "direct", fallbackRoomId = 0)
             }
             AloNativeAppAction.CloseConversation -> {
+                val thread = appState.commentsThread
+                val open = appState.activeConversation
+                if (thread != null && open != null && open.roomId == thread.roomId) {
+                    // Leaving a post's comments: mark them read (the dot under the post goes away) and go back to the channel.
+                    val latest = open.items.filter { it.topicId == thread.topicId && it.id > 0 }.maxOfOrNull { it.id } ?: 0
+                    if (latest > 0) lifecycleScope.launch {
+                        runCatching { apiClient.updateGroupTopicState(thread.roomId, thread.topicId, readThroughMessageId = latest) }
+                    }
+                    val back = appState.commentsReturnPeerId
+                    appState = appState.copy(commentsThread = null, commentsReturnPeerId = 0)
+                    if (back > 0) {
+                        messageDraftStore.persistFrom(appState)
+                        stopActiveRecordingForNavigation()
+                        appState = appState.copy(activeMedia = null)
+                        openNativeConversation(back)
+                        return
+                    }
+                } else if (thread != null) {
+                    appState = appState.copy(commentsThread = null, commentsReturnPeerId = 0)
+                }
                 // Messages may have arrived while the chat was open: mark the newest summary read.
                 markConversationRead(appState.activeConversationPeerId)
                 messageDraftStore.persistFrom(appState)
@@ -1791,6 +1876,19 @@ class MainActivity : ComponentActivity() {
                 qrLoginPollingJob?.cancel()
                 AuthUiState(savedAccounts = authState.savedAccounts)
             }
+            AuthStep.ResetCode -> authState.copy(
+                step = AuthStep.LoginPassword,
+                code = "",
+                newPassword = "",
+                errorMessage = null,
+                noticeMessage = null,
+                resendCooldownSec = 0
+            )
+            AuthStep.ResetPassword -> authState.copy(
+                step = AuthStep.ResetCode,
+                newPassword = "",
+                errorMessage = null
+            )
         }
     }
 
@@ -1876,7 +1974,93 @@ class MainActivity : ComponentActivity() {
                 }
                 verifyEmail()
             }
+            AuthStep.ResetCode -> {
+                if (authState.code.length != 6) {
+                    showError("Код должен состоять из 6 цифр.")
+                    return
+                }
+                authState = authState.copy(step = AuthStep.ResetPassword, errorMessage = null, noticeMessage = null)
+            }
+            AuthStep.ResetPassword -> {
+                if (authState.newPassword.length < 8) {
+                    showError("Новый пароль должен быть не меньше 8 символов.")
+                    return
+                }
+                submitPasswordReset()
+            }
             AuthStep.QrLogin, AuthStep.DeviceLinkWaiting -> Unit
+        }
+    }
+
+    /** «Забыли пароль?» on the password step: a code to the address from the step before (Cloudflare check first). */
+    private fun requestPasswordReset(captchaToken: String? = null) {
+        val email = normalizeEmail(authState.email)
+        if (!isValidEmail(email)) {
+            showError("Сначала введите почту.")
+            return
+        }
+        resendCountdownJob?.cancel()
+        authState = authState.copy(email = email, isSubmitting = true, errorMessage = null, noticeMessage = null, isAccountBlockedByModeration = false)
+
+        lifecycleScope.launch {
+            try {
+                val result = apiClient.forgotPassword(email = email, captchaToken = captchaToken)
+                authState = authState.copy(
+                    step = AuthStep.ResetCode,
+                    code = "",
+                    newPassword = "",
+                    isSubmitting = false,
+                    errorMessage = null,
+                    noticeMessage = result.message
+                )
+                startResendCooldown(result.nextWaitSec)
+            } catch (error: AloApiException) {
+                if (handleHumanChallengeIfNeeded(error) { token -> requestPasswordReset(token) }) {
+                    return@launch
+                }
+                val waitSec = error.payload.optInt("retryAfterSec", 0)
+                authState = authState.copy(isSubmitting = false, errorMessage = error.message)
+                if (waitSec > 0) startResendCooldown(waitSec)
+            } catch (_error: Exception) {
+                authState = authState.copy(isSubmitting = false, errorMessage = "Не удалось подключиться к серверу.")
+            }
+        }
+    }
+
+    private fun submitPasswordReset() {
+        authState = authState.copy(isSubmitting = true, errorMessage = null, isAccountBlockedByModeration = false)
+
+        lifecycleScope.launch {
+            try {
+                val signedIn = apiClient.resetPassword(
+                    email = authState.email,
+                    code = authState.code,
+                    password = authState.newPassword
+                )
+                if (signedIn) {
+                    openNativeApp()
+                } else {
+                    // A blocked account gets its new password but no session until the block ends.
+                    resendCountdownJob?.cancel()
+                    authState = AuthUiState(
+                        step = AuthStep.LoginEmail,
+                        email = authState.email,
+                        savedAccounts = authState.savedAccounts,
+                        noticeMessage = "Пароль изменён. Войти можно будет, когда закончится блокировка аккаунта."
+                    )
+                }
+            } catch (error: AloApiException) {
+                // A wrong or stale code is fixed on the code step; a weak password stays here.
+                val codeProblem = error.code == "INVALID_VERIFICATION_CODE" || error.code == "VERIFICATION_CODE_LOCKED"
+                authState = authState.copy(
+                    step = if (codeProblem) AuthStep.ResetCode else AuthStep.ResetPassword,
+                    code = if (error.code == "VERIFICATION_CODE_LOCKED") "" else authState.code,
+                    isSubmitting = false,
+                    errorMessage = error.message
+                )
+            } catch (_error: Exception) {
+                authState = authState.copy(isSubmitting = false, errorMessage = "Не удалось подключиться к серверу.")
+            }
         }
     }
 
@@ -2045,6 +2229,7 @@ class MainActivity : ComponentActivity() {
                         challengeToken = authState.challengeToken
                     )
                     AuthStep.VerifyEmailCode -> apiClient.resendVerification(authState.email)
+                    AuthStep.ResetCode -> apiClient.forgotPassword(email = authState.email, resend = true)
                     else -> return@launch
                 }
 
@@ -2136,6 +2321,7 @@ class MainActivity : ComponentActivity() {
                 } ?: 0,
                 activeChatAppearance = chatAppearanceStore.read(mergedActiveConversation),
                 blockedUserIds = blockedUserIds,
+                blockedUserPeers = latestBlockedUserPeers,
                 blockActionUserId = null,
                 isRefreshing = false,
                 isSubmittingPost = false,
@@ -2154,6 +2340,7 @@ class MainActivity : ComponentActivity() {
                 errorMessage = apiClient.displayedE2eeWarning
             )
             startChatRealtime(bootstrap.me.id)
+            refreshAccountSummaries()
             secretChats.refreshAll()
             if (startingOwner != bootstrap.me.id) restoreActiveMessageDraft()
             scheduleGlobalConversationSearchIndex(bootstrap)
@@ -2273,6 +2460,7 @@ class MainActivity : ComponentActivity() {
     private fun captureDeepLink(intent: Intent?) {
         if (intent?.hasExtra("openToken") == true) AloCrashReporter.note("push_tap")
         runCatching { pushOpenStore.capture(intent?.getStringExtra("openToken"), intent?.getStringExtra("payloadVersion")) }
+        intent?.getStringExtra("accountId")?.toIntOrNull()?.takeIf { it > 0 }?.let { pendingPushAccountId = it }
         val uri = intent?.data ?: return
         if (AloDeepLinkTarget.parse(uri) == null) return
         appPrefs.edit().putString(PENDING_DEEP_LINK_KEY, uri.toString()).apply()
@@ -2281,6 +2469,15 @@ class MainActivity : ComponentActivity() {
     private fun processPendingPushOpenIfReady() {
         val owner = appState.bootstrap?.me?.id ?: return
         if (rootScreen != RootScreen.App || isProcessingPushOpen) return
+        val wantedAccount = pendingPushAccountId
+        if (wantedAccount > 0) {
+            pendingPushAccountId = 0
+            if (wantedAccount != owner && secureAccountStore.sessionFor(wantedAccount) != null) {
+                // The push stays in pushOpenStore and opens once the other account has loaded.
+                switchSecurityAccount(wantedAccount)
+                return
+            }
+        }
         val cookie = currentCookieHeader()
         fun current() = appState.bootstrap?.me?.id == owner && AloOfflineAccountPolicy.matchesSession(cookie, currentCookieHeader())
         isProcessingPushOpen = true
@@ -2363,6 +2560,12 @@ class MainActivity : ComponentActivity() {
                     }
                     is AloDeepLinkTarget.Post -> {
                         val post = apiClient.loadPost(target.postId)
+                        appPrefs.edit().remove(PENDING_DEEP_LINK_KEY).apply()
+                        appState = appState.copy(activeTab = AloAppTab.Feed)
+                        openPostComments(post)
+                    }
+                    is AloDeepLinkTarget.PostCode -> {
+                        val post = apiClient.loadPostByShareCode(target.code)
                         appPrefs.edit().remove(PENDING_DEEP_LINK_KEY).apply()
                         appState = appState.copy(activeTab = AloAppTab.Feed)
                         openPostComments(post)
@@ -2475,14 +2678,28 @@ class MainActivity : ComponentActivity() {
         offlineCacheStore.clear(ownerUserId)
     }
 
+    /** Filled with every load of the blocked list; goes into the state together with the ids. */
+    private var latestBlockedUserPeers: List<AloConversationPeer> = emptyList()
+
+    /** After blocking or unblocking: the list with names again, so «Чёрный список» shows the new person by name. */
+    private fun refreshBlockedUserPeers(ownerUserId: Int) {
+        lifecycleScope.launch {
+            val peers = runCatching { apiClient.loadBlockedUsers().second }.getOrNull() ?: return@launch
+            if (appState.bootstrap?.me?.id != ownerUserId) return@launch
+            latestBlockedUserPeers = peers
+            appState = appState.copy(blockedUserPeers = peers)
+        }
+    }
+
     private suspend fun loadBlockedUserIds(ownerUserId: Int): Set<Int> {
         if (ownerUserId <= 0) return emptySet()
         return try {
-            apiClient.loadBlockedUserIds().also { blockedUserIds ->
-                withContext(Dispatchers.IO) {
-                    offlineCacheStore.saveBlockedUserIds(ownerUserId, blockedUserIds)
-                }
+            val (blockedUserIds, peers) = apiClient.loadBlockedUsers()
+            latestBlockedUserPeers = peers
+            withContext(Dispatchers.IO) {
+                offlineCacheStore.saveBlockedUserIds(ownerUserId, blockedUserIds)
             }
+            blockedUserIds
         } catch (error: AloApiException) {
             if (error.status == 401) throw error
             withContext(Dispatchers.IO) {
@@ -2523,6 +2740,7 @@ class MainActivity : ComponentActivity() {
                     blockActionUserId = null,
                     errorMessage = null
                 )
+                refreshBlockedUserPeers(ownerUserId)
                 if (blocked) {
                     if (isBlockedDirectConversation()) {
                         cleanupComposerTransientState()
@@ -4347,6 +4565,31 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Unread messages of the other accounts saved here, asked with each one's session (GET /api/auth/session-summary). */
+    private fun refreshAccountSummaries() {
+        val me = appState.bootstrap?.me?.id ?: return
+        val others = secureAccountStore.accounts().filter { it.userId != me }
+        if (others.isEmpty()) {
+            if (appState.accountUnread.isNotEmpty()) appState = appState.copy(accountUnread = emptyMap())
+            return
+        }
+        lifecycleScope.launch {
+            val unread = mutableMapOf<Int, Int>()
+            val ended = mutableListOf<Int>()
+            for (account in others) {
+                val cookie = secureAccountStore.sessionFor(account.userId)
+                if (cookie == null) { ended += account.userId; continue }
+                // Null: that session is over (signed out elsewhere, expired) and it leaves the switcher; offline keeps it.
+                val summary = runCatching { apiClient.loadAccountSummary(cookie) }
+                summary.onSuccess { result -> if (result == null) ended += account.userId else unread[account.userId] = result.unreadMessages }
+            }
+            ended.forEach(secureAccountStore::removeAccount)
+            if (appState.bootstrap?.me?.id == me) {
+                appState = appState.copy(accountUnread = unread, savedAccounts = secureAccountStore.accounts())
+            }
+        }
+    }
+
     private fun loadSecurityAccounts() {
         appState = appState.copy(
             savedAccounts = secureAccountStore.accounts(),
@@ -4358,6 +4601,11 @@ class MainActivity : ComponentActivity() {
     private fun addAnotherAccount() {
         val me = appState.bootstrap?.me ?: return
         if (designPreview != null || appState.isAccountSecurityLoading) return
+        if (secureAccountStore.accounts().count { it.userId != me.id } + 1 >= AloAccountSwitcher.MAX_ACCOUNTS) {
+            val text = "На одном устройстве можно держать до ${AloAccountSwitcher.MAX_ACCOUNTS} аккаунтов. Выйдите из одного, чтобы добавить новый."
+            appState = appState.copy(notice = text, securityNotice = text)
+            return
+        }
         lifecycleScope.launch {
             runCatching { secureAccountStore.saveCurrentSession(me, currentCookieHeader()) }
                 .onFailure {
@@ -4860,12 +5108,24 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 try {
                     val discussion = apiClient.openPostDiscussion(post.id)
+                    // Back from the comments goes to the channel they were opened from (Telegram); its row under the
+                    // post loses the dot at once.
+                    val from = appState.activeConversation
+                    val returnPeerId = if (from != null && from.roomId != discussion.roomId) appState.activeConversationPeerId else 0
                     appState = appState.copy(
                         commentsPostId = 0,
                         commentsPost = null,
                         comments = emptyList(),
                         isCommentsLoading = false,
-                        errorMessage = null
+                        errorMessage = null,
+                        commentsThread = AloCommentsThread(
+                            roomId = discussion.roomId,
+                            topicId = discussion.topicId,
+                            postId = post.id,
+                            post = discussion.post ?: post,
+                            count = discussion.commentCount
+                        ),
+                        commentsReturnPeerId = returnPeerId
                     )
                     openNativeConversation(
                         peerId = discussion.peerId,
@@ -4969,7 +5229,8 @@ class MainActivity : ComponentActivity() {
                             if (comment.id == result.comment.id) result.comment else comment
                         }
                     } else {
-                        appState.comments + result.comment
+                        // The realtime event may have added it already, before this reply came.
+                        aloUpsertComment(appState.comments, result.comment)
                     }
                 } else {
                     apiClient.loadComments(postId)
@@ -5548,10 +5809,9 @@ class MainActivity : ComponentActivity() {
                     scheduleBootstrapRefreshFromUpdates(ownerUserId)
                 } else {
                     if (appState.commentsPostId == action.postId) {
-                        val exists = appState.comments.any { it.id == comment.id }
                         appState = appState.copy(
-                            comments = if (action.isNew && !exists) {
-                                appState.comments + comment
+                            comments = if (action.isNew) {
+                                aloUpsertComment(appState.comments, comment)
                             } else {
                                 appState.comments.map {
                                     if (it.id == comment.id) comment else it
@@ -5690,6 +5950,24 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
+                }
+            }
+            is AloUnifiedUpdateAction.ApplyChannelPostComments -> {
+                val data = action.data
+                val peerId = data.optInt("peerId")
+                val postId = data.optInt("postId")
+                val conversation = appState.activeConversation
+                if (peerId > 0 && postId > 0 && conversation != null && appState.activeConversationPeerId == peerId) {
+                    val commenters = apiClient.parseConversationPeers(data.optJSONArray("recentCommenters")).take(3)
+                    appState = appState.copy(
+                        activeConversation = conversation.copy(items = conversation.items.map { item ->
+                            if (item.channelPostId != postId) item else item.copy(
+                                channelPostCommentCount = data.optInt("commentCount").coerceAtLeast(0),
+                                channelPostRecentCommenters = commenters,
+                                channelPostHasUnreadComments = data.optBoolean("hasUnread")
+                            )
+                        })
+                    )
                 }
             }
             is AloUnifiedUpdateAction.ApplyChannel -> {
@@ -9074,7 +9352,7 @@ class MainActivity : ComponentActivity() {
     }
 
     /** The camera overlay of the secret chat finished a circle: it is sealed and sent, as Telegram sends a circle. */
-    private fun completeSecretCircleRecording(localUri: String, durationSec: Int) {
+    private fun completeSecretCircleRecording(localUri: String, durationSec: Int, send: Boolean = true) {
         val chatId = appState.activeSecretChatId
         appState = appState.copy(
             secretCaptureState = AloChatCaptureState.Idle,
@@ -9092,7 +9370,7 @@ class MainActivity : ComponentActivity() {
                 }
                 // The length read from the file wins over the overlay's counter (it runs fast on a busy device).
                 val seconds = draft.durationSec.takeIf { it > 0 } ?: durationSec
-                secretChats.addRecordedDraft(chatId, draft.copy(durationSec = seconds.coerceAtLeast(1)), sendNow = true)
+                secretChats.addRecordedDraft(chatId, draft.copy(durationSec = seconds.coerceAtLeast(1)), sendNow = send)
             } catch (_: Exception) {
                 appState = appState.copy(errorMessage = "Не удалось подготовить видео-кружок.")
             }
@@ -10791,7 +11069,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun completeVideoCircleRecording(localUri: String, durationSec: Int) {
+    private fun completeVideoCircleRecording(localUri: String, durationSec: Int, send: Boolean = false) {
         if (isBlockedDirectConversation()) return
         lifecycleScope.launch {
             try {
@@ -10810,6 +11088,8 @@ class MainActivity : ComponentActivity() {
                     messageDraftAttachments = emptyList(),
                     errorMessage = null
                 )
+                // Released on the mic (Telegram): the circle goes out without a preview.
+                if (send) sendMessageDraft()
             } catch (_error: Exception) {
 	                appState = appState.copy(
 	                    messageCaptureState = AloChatCaptureState.Idle,

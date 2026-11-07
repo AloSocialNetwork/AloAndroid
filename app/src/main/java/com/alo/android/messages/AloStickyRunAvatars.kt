@@ -24,6 +24,8 @@ private data class AloRunOnScreen(val start: Int, val top: Int, val bottom: Int,
 internal fun BoxScope.AloStickyRunAvatars(
     listState: LazyListState,
     messages: List<AloChatMessage>,
+    /** Rows above the first message (the post on top of its comments). */
+    listHeaderItems: Int = 0,
     meId: Int,
     dayOf: (AloChatMessage) -> String,
     onOpenProfile: (AloProfileTarget) -> Unit
@@ -31,15 +33,16 @@ internal fun BoxScope.AloStickyRunAvatars(
     val density = LocalDensity.current
     val avatarPx = with(density) { AloGroupMessageMetrics.AvatarSize.roundToPx() }
     val leftPx = with(density) { AloGroupMessageMetrics.AvatarLeft.roundToPx() }
-    val runs by remember(messages, meId) {
+    val runs by remember(messages, meId, listHeaderItems) {
         derivedStateOf {
             val info = listState.layoutInfo
             val stick = info.viewportSize.height - info.afterContentPadding
             val found = linkedMapOf<Int, AloRunOnScreen>()
             for (item in info.visibleItemsInfo) {
-                val message = messages.getOrNull(item.index) ?: continue
+                val messageIndex = item.index - listHeaderItems
+                val message = messages.getOrNull(messageIndex) ?: continue
                 if (message.senderId == meId || aloBreaksGroupRun(message) || message.sender == null) continue
-                var start = item.index
+                var start = messageIndex
                 while (start > 0 && aloContinuesGroupRun(messages[start - 1], messages[start], ::aloBreaksGroupRun, dayOf)) start -= 1
                 val top = item.offset - info.viewportStartOffset
                 val bottom = top + item.size

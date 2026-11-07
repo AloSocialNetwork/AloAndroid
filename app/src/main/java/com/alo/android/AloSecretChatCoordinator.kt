@@ -440,7 +440,7 @@ internal fun AloSecretMessage.toChatMessage(): AloChatMessage {
         roomId = 0,
         senderId = senderUserId,
         recipientId = 0,
-        body = body,
+        body = aloTameText(body),
         attachmentUrl = first?.url.orEmpty(),
         attachmentType = first?.type.orEmpty(),
         attachmentName = first?.name.orEmpty(),

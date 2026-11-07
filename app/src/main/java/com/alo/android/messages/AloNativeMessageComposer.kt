@@ -141,6 +141,8 @@ internal fun MessageComposer(
     onStopRecording: (Boolean) -> Unit,
     /** Stops a voice recording and sends it at once: Telegram's release of a held mic. */
     onSendRecording: () -> Unit = {},
+    /** The finger is on the mic of a recording (Telegram: a circle at its minute is then sent, not previewed). */
+    onRecordingHeldChange: (Boolean) -> Unit = {},
     onDiscardDraft: () -> Unit,
     onRemoveDraftAttachment: (String) -> Unit,
     onSelfDestructSecondsChange: (Int) -> Unit,
@@ -186,7 +188,26 @@ internal fun MessageComposer(
     val isEditing = editingMessage != null
     val canSubmitEdit = isEditing && (hasText || editingMessage?.attachments?.isNotEmpty() == true)
     val hasForwardDraft = forwardDraft.isNotEmpty()
-    val isRecording = captureState == AloChatCaptureState.Recording
+    // Debug-only screenshot fixture of the voice states (`--es alo_ui_voice held|slide|lift|locked|preview`).
+    val voiceFixture = rememberAloVoiceRecordingFixture()
+    val recordMode = if (voiceFixture != null) AloChatRecordMode.Voice else recordMode
+    val isRecording = captureState == AloChatCaptureState.Recording || (voiceFixture != null && voiceFixture != "preview")
+    val recordingLevels = if (voiceFixture != null && recordingLevels.isEmpty()) AloVoiceFixtureLevels else recordingLevels
+    val fixtureContext = LocalContext.current
+    val draftAttachment = draftAttachment ?: if (voiceFixture == "preview") remember {
+        AloChatDraftAttachment(
+            localUri = AloDesignFixture.sampleVoiceUri(fixtureContext), attachmentType = "voice",
+            mimeType = "audio/wav", name = "voice.wav", durationSec = 7, waveform = AloVoiceFixtureLevels
+        )
+    } else null
+    // When the recording began, for Telegram's «0:03,45» timer.
+    var recordingStartedAtMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(isRecording) {
+        if (isRecording) recordingStartedAtMs = System.currentTimeMillis() - if (voiceFixture != null) 3_420L else 0L
+    }
+    // Telegram Android records a round video with the same bar, lock and circle as a voice message.
+    val voiceRecording = isRecording
+    val circleRecording = isRecording && recordMode == AloChatRecordMode.VideoCircle
     // Telegram's held mic (AloRecordingGesture): where the holding finger has gone, whether it is
     // still down, and whether the recording was locked so it could let go.
     var recordDrag by remember { mutableStateOf(AloRecordingDrag()) }
@@ -199,6 +220,15 @@ internal fun MessageComposer(
             recordDrag = AloRecordingDrag()
         }
     }
+    LaunchedEffect(voiceFixture) {
+        when (voiceFixture) {
+            "held" -> recordingHeld = true
+            "slide" -> { recordingHeld = true; recordDrag = AloRecordingDrag(dx = -60f) }
+            "lift" -> { recordingHeld = true; recordDrag = AloRecordingDrag(dy = -34f) }
+            "locked" -> recordingLocked = true
+        }
+    }
+    val screenWidthDp = androidx.compose.ui.platform.LocalConfiguration.current.screenWidthDp.toFloat()
     val hasMultiAttachmentPreview = draftAttachments.isNotEmpty()
     val hasRecordingPreview = draftAttachment != null || hasMultiAttachmentPreview
     val previewDurationSec = draftAttachment?.durationSec ?: 0
@@ -235,9 +265,13 @@ internal fun MessageComposer(
             onSend = onSendRecording,
             onStopToPreview = { onStopRecording(false) },
             onDrag = { recordDrag = it },
-            onHeld = { recordingHeld = it },
+            onHeld = {
+                recordingHeld = it
+                onRecordingHeldChange(it)
+            },
             onLock = { recordingLocked = true },
-            haptic = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
+            haptic = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) },
+            cancelDistance = AloRecordingDrag.cancelDistanceFor(screenWidthDp)
         )
     )
     val buttonColor by animateColorAsState(
@@ -395,7 +429,17 @@ internal fun MessageComposer(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val leadingIcon = if (isEditing || hasRecordingPreview || isRecording) Icons.Rounded.Close else Icons.Rounded.AttachFile
+            val leadingIcon = when {
+                isVoicePreview && !isEditing -> Icons.Rounded.Delete
+                isEditing || hasRecordingPreview || isRecording -> Icons.Rounded.Close
+                else -> Icons.Rounded.AttachFile
+            }
+            // Telegram: while a voice message records, the record panel takes the whole row up to the mic.
+            androidx.compose.animation.AnimatedVisibility(
+                visible = !voiceRecording,
+                enter = fadeIn(tween(180)) + androidx.compose.animation.expandHorizontally(tween(220)),
+                exit = fadeOut(tween(140)) + androidx.compose.animation.shrinkHorizontally(tween(220))
+            ) {
             AloNativeGlassPanel(
                 modifier = Modifier.scale(attachmentScale),
                 shape = CircleShape,
@@ -429,9 +473,10 @@ internal fun MessageComposer(
                             else -> "Прикрепить"
                         },
                         tint = AloNativeAppMuted,
-                        modifier = Modifier.size(if (leadingIcon == Icons.Rounded.AttachFile) 22.dp else 19.dp)
+                        modifier = Modifier.size(if (leadingIcon == Icons.Rounded.Close) 19.dp else 22.dp)
                     )
                 }
+            }
             }
 
             AloNativeGlassPanel(
@@ -447,8 +492,7 @@ internal fun MessageComposer(
                 AnimatedContent(
                     modifier = Modifier.fillMaxWidth(),
                     targetState = when {
-                        isRecording && recordMode == AloChatRecordMode.Voice -> "voice_record"
-                        isRecording && recordMode == AloChatRecordMode.VideoCircle -> "circle_record"
+                        isRecording -> "voice_record"
                         hasMultiAttachmentPreview -> "gallery_preview"
                         isVoicePreview -> "voice_preview"
                         isCirclePreview -> "circle_preview"
@@ -475,163 +519,30 @@ internal fun MessageComposer(
                                 if (mode == "text") Modifier.height(textComposerHeight)
                                 else Modifier.height(48.dp)
                             )
-                            .padding(start = 14.dp, end = 10.dp),
+                            .padding(
+                                start = if (mode == "voice_preview") 6.dp else 14.dp,
+                                end = if (mode == "voice_preview") 6.dp else 10.dp
+                            ),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         when (mode) {
                             "voice_record" -> {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (recordingLocked) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Delete,
-                                            contentDescription = "Удалить запись",
-                                            tint = Color(0xFFFF453A),
-                                            modifier = Modifier
-                                                .size(22.dp)
-                                                .clickable { onStopRecording(true) }
-                                        )
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(10.dp)
-                                            .scale(pulseScale)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFFFF5D73))
-                                    )
-                                    Text(
-                                        text = durationLabel,
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                        color = AloNativeAppText
-                                    )
-                                    if (recordingLocked) {
-                                        RecordingWaveform(
-                                            modifier = Modifier.weight(1f),
-                                            tint = AloNativeAppText.copy(alpha = 0.64f),
-                                            levels = recordingLevels
-                                        )
-                                        Icon(
-                                            imageVector = Icons.Rounded.Stop,
-                                            contentDescription = "Завершить и прослушать запись",
-                                            tint = AloNativeChatSendAccent,
-                                            modifier = Modifier
-                                                .size(26.dp)
-                                                .clickable { onStopRecording(false) }
-                                        )
-                                    } else {
-                                        Spacer(Modifier.weight(1f))
-                                        // Telegram's «Slide to cancel»: it follows the finger left and fades.
-                                        Text(
-                                            text = "‹ Отмена",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = AloNativeAppMuted,
-                                            maxLines = 1,
-                                            modifier = Modifier
-                                                .graphicsLayer {
-                                                    translationX = -recordDrag.cancelProgress * 24.dp.toPx()
-                                                    alpha = 1f - recordDrag.cancelProgress * 0.65f
-                                                }
-                                                .clickable { onStopRecording(true) }
-                                                .padding(horizontal = 4.dp, vertical = 8.dp)
-                                        )
-                                    }
-                                }
-                            }
-
-                            "circle_record" -> {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    RecordingCircleIndicator(
-                                        pulseScale = pulseScale
-                                    )
-                                    Column {
-                                        Text(
-                                            text = "Кружок записывается",
-                                            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
-                                            color = AloNativeAppText
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(top = 6.dp)
-                                                .width(96.dp)
-                                                .height(4.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(0x18FFFFFF))
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth(((recordingDurationSec % 8) + 1) / 8f)
-                                                    .height(4.dp)
-                                                    .clip(CircleShape)
-                                                    .background(AloNativeAppText.copy(alpha = 0.72f))
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = durationLabel,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AloNativeAppMuted
-                                    )
-                                }
+                                AloVoiceRecordingPanel(
+                                    startedAtMs = recordingStartedAtMs,
+                                    isLocked = recordingLocked,
+                                    drag = recordDrag,
+                                    onCancel = { onStopRecording(true) },
+                                    modifier = Modifier.weight(1f)
+                                )
                             }
 
                             "voice_preview" -> {
-                                Row(
-                                    modifier = Modifier.weight(1f),
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Surface(
-                                        modifier = Modifier.size(36.dp),
-                                        shape = CircleShape,
-                                        color = Color.White.copy(alpha = 0.92f)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.PlayArrow,
-                                                contentDescription = null,
-                                                tint = AloNativeChatSendAccent,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                    Column(
-                                        modifier = Modifier.weight(1f)
-                                    ) {
-                                        RecordingWaveform(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            tint = AloNativeChatSendAccent.copy(alpha = 0.72f),
-                                            levels = recordingLevels
-                                        )
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(top = 6.dp)
-                                                .fillMaxWidth()
-                                                .height(3.dp)
-                                                .clip(CircleShape)
-                                                .background(Color(0x18FFFFFF))
-                                        ) {
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth(0.42f)
-                                                    .height(3.dp)
-                                                    .clip(CircleShape)
-                                                    .background(AloNativeChatSendAccent.copy(alpha = 0.82f))
-                                            )
-                                        }
-                                    }
-                                    Text(
-                                        text = durationLabel,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = AloNativeAppMuted
-                                    )
-                                }
+                                AloVoiceDraftPreview(
+                                    uri = draftAttachment?.localUri.orEmpty(),
+                                    levels = draftAttachment?.waveform.orEmpty().ifEmpty { recordingLevels },
+                                    durationSec = displayedDurationSec,
+                                    modifier = Modifier.weight(1f)
+                                )
                             }
 
                             "circle_preview" -> {
@@ -864,7 +775,7 @@ internal fun MessageComposer(
                 modifier = Modifier.size(composerControlSize),
                 contentAlignment = Alignment.Center
             ) {
-                if (isRecording && !hasText && !recordingHeld && !recordingLocked) {
+                if (isRecording && !hasText && !recordingHeld && !recordingLocked && !voiceRecording) {
                     Box(
                         modifier = Modifier
                             .size(composerControlSize)
@@ -873,19 +784,45 @@ internal fun MessageComposer(
                             .background(Color(0x24FF5D73))
                     )
                 }
-                // The held mic: Telegram's lock above it and the big circle under the finger.
-                if (isRecording && recordingHeld && !recordingLocked && recordMode == AloChatRecordMode.Voice) {
+                // Telegram Android: the lock 112dp above the mic rises with the finger; the 82dp circle
+                // follows it up and shrinks towards cancel. Once locked the circle stays and sends,
+                // and the lock turns into a pause button that stops into the preview.
+                if (voiceRecording && recordingHeld && !recordingLocked) {
+                    val lockHeight = 50f - 14f * recordDrag.lockProgress
                     AloRecordingLock(
                         progress = recordDrag.lockProgress,
                         onLock = { recordingLocked = true },
-                        modifier = Modifier.offset(y = (-104).dp).zIndex(2f)
+                        modifier = Modifier
+                            .offset(y = (-112f + lockHeight / 2f + recordDrag.orbY).dp)
+                            .zIndex(2f)
                     )
+                }
+                if (voiceRecording && recordingLocked) {
+                    AloRecordingPauseButton(
+                        onClick = { onStopRecording(false) },
+                        modifier = Modifier.offset(y = (-78).dp).zIndex(2f)
+                    )
+                }
+                if (voiceRecording && (recordingHeld || recordingLocked)) {
                     AloRecordingOrb(
-                        icon = Icons.Rounded.Mic,
+                        icon = when {
+                            recordingLocked -> Icons.AutoMirrored.Rounded.Send
+                            circleRecording -> Icons.Rounded.Videocam
+                            else -> Icons.Rounded.Mic
+                        },
                         color = AloNativeChatSendAccent,
                         level = recordingLevels.lastOrNull() ?: 0f,
-                        cancelProgress = recordDrag.cancelProgress,
-                        modifier = Modifier.offset(x = recordDrag.orbX.dp, y = recordDrag.orbY.dp).zIndex(3f)
+                        scale = if (recordingLocked) 1f else recordDrag.orbScale,
+                        contentDescription = if (recordingLocked) "Отправить запись" else null,
+                        modifier = Modifier
+                            .offset(y = if (recordingLocked) 0.dp else recordDrag.orbY.dp)
+                            .zIndex(3f)
+                            .then(
+                                if (recordingLocked) Modifier
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onSendRecording)
+                                else Modifier
+                            )
                     )
                 }
                 val actionTint = if (buttonColor == AloNativeChatSendAccent || buttonColor == Color(0xFFFF5D73)) {
@@ -893,8 +830,12 @@ internal fun MessageComposer(
                 } else {
                     glassTone
                 }
+                // Under Telegram's record circle the mic itself is hidden; it keeps the holding finger's gesture.
+                val hideActionUnderOrb = voiceRecording && (recordingHeld || recordingLocked)
                 AloNativeGlassPanel(
-                    modifier = Modifier.scale(actionScale),
+                    modifier = Modifier
+                        .scale(actionScale)
+                        .graphicsLayer { alpha = if (hideActionUnderOrb) 0f else 1f },
                     shape = CircleShape,
                     tint = actionTint,
                     borderColor = if (actionTint == glassTone) AloNativeAppBorder.copy(alpha = 0.05f) else buttonColor.copy(alpha = 0.32f)

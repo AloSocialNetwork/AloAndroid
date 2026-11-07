@@ -59,6 +59,16 @@ data class AloEntityRelation(
     val canSendFriendRequest: Boolean? = null
 )
 
+/** Another account saved on this phone, as the switcher shows it (GET /api/auth/session-summary). */
+data class AloAccountSummary(
+    val userId: Int,
+    val name: String,
+    val username: String,
+    val avatarUrl: String,
+    val unreadMessages: Int,
+    val unreadNotifications: Int
+)
+
 data class AloCurrentUser(
     val id: Int,
     val name: String,
@@ -149,6 +159,9 @@ data class AloChatMessage(
     val channelPostId: Int = 0,
     val channelPostCommentCount: Int = 0,
     val channelPostCommentsEnabled: Boolean = false,
+    /** Telegram's comments row: the latest commenters (newest first, up to three) and the unread dot. */
+    val channelPostRecentCommenters: List<AloConversationPeer> = emptyList(),
+    val channelPostHasUnreadComments: Boolean = false,
     val scheduledMessageId: Int = 0,
     val scheduledAt: String = "",
     val sendWhenOnline: Boolean = false,
@@ -558,7 +571,10 @@ data class AloResolvedAppLink(
 data class AloPostDiscussion(
     val roomId: Int,
     val peerId: Int,
-    val topicId: Int
+    val topicId: Int,
+    /** For the comments screen (Telegram): how many there are and the post shown on top of them. */
+    val commentCount: Int = 0,
+    val post: AloPost? = null
 )
 
 data class AloForumTopicLink(
@@ -1020,7 +1036,11 @@ data class AloConversationDetail(
     val forumTopicStates: List<AloForumTopicState> = emptyList(),
     val pinnedMessageIds: List<Int> = emptyList(),
     val canonicalPolls: Map<String, AloCanonicalPollState> = emptyMap(),
-    val autoDeleteSeconds: Int = 0
+    val autoDeleteSeconds: Int = 0,
+    /** A channel opened before subscribing (Telegram's preview): read-only, «Подписаться» at the bottom. */
+    val isMember: Boolean = true,
+    /** The community behind a channel's chat (`/api/channels/<id>/subscribe`). */
+    val feedChannelId: Int = 0
 )
 
 data class AloMediaItem(
@@ -1263,7 +1283,9 @@ data class AloPost(
     /** Why the feed shows it: own, own_channel, subscribed_channel, friend or popular. */
     val feedReason: String = "",
     /** When the author last changed it; empty for a post never edited. */
-    val editedAt: String = ""
+    val editedAt: String = "",
+    /** The random code of the public link https://ало.online/p/<code>; empty from an older server. */
+    val shareCode: String = ""
 )
 
 /** One page of a list the first screen only shows the top of: [nextOffset] is where the following page starts. */
@@ -1508,7 +1530,9 @@ data class AloViewedProfile(
     val signMessages: Boolean = false,
     val showAuthorProfiles: Boolean = false,
     val discussionRoomId: Int = 0,
-    val adminEvents: List<AloChannelAdminEvent> = emptyList()
+    val adminEvents: List<AloChannelAdminEvent> = emptyList(),
+    /** A channel's chat (opened from its page, also before subscribing). */
+    val messengerRoomId: Int = 0
 )
 
 data class AloNotificationSettings(
@@ -1972,6 +1996,90 @@ class AloApiClient(
             path = "/api/push/device-token",
             body = pushTokenRegistrationBody(safeToken, deviceId, appVersion, soundsEnabled, previewsEnabled)
         )
+    }
+
+    /**
+     * Another account saved on this phone (Telegram's account switcher), asked with its own session cookie: name, avatar
+     * and unread messages for the switcher. Null when that session is over. The app's own cookies are not touched.
+     */
+    suspend fun loadAccountSummary(cookieHeader: String): AloAccountSummary? {
+        val json = try {
+            requestAs(cookieHeader, "GET", "/api/auth/session-summary")
+        } catch (error: AloApiException) {
+            if (error.status == 401 || error.status == 403) return null
+            throw error
+        }
+        val account = json.optJSONObject("account") ?: return null
+        return AloAccountSummary(
+            userId = account.optInt("id"),
+            name = account.optString("name"),
+            username = account.optString("username"),
+            avatarUrl = resolveUrl(account.optString("avatarUrl")),
+            unreadMessages = account.optInt("unreadMessages").coerceAtLeast(0),
+            unreadNotifications = account.optInt("unreadNotifications").coerceAtLeast(0)
+        ).takeIf { it.userId > 0 }
+    }
+
+    /** The push token of this phone for another saved account: each account of the phone gets its pushes. */
+    suspend fun registerPushTokenAs(
+        cookieHeader: String,
+        token: String,
+        deviceId: String,
+        appVersion: String,
+        soundsEnabled: Boolean? = null,
+        previewsEnabled: Boolean? = null
+    ) {
+        val safeToken = token.trim()
+        if (safeToken.isBlank() || cookieHeader.isBlank()) return
+        requestAs(
+            cookieHeader,
+            "PUT",
+            "/api/push/device-token",
+            pushTokenRegistrationBody(safeToken, deviceId, appVersion, soundsEnabled, previewsEnabled)
+        )
+    }
+
+    /** A JSON request as another saved account: its cookie is sent, and what the server sets is not kept. */
+    private suspend fun requestAs(
+        cookieHeader: String,
+        method: String,
+        path: String,
+        body: JSONObject? = null
+    ): JSONObject = withContext(Dispatchers.IO) {
+        if (releaseInsecureTransport) {
+            throw AloApiException(status = -1, code = "HTTPS_REQUIRED", message = "Release-сборка требует HTTPS адрес сервера.", payload = JSONObject())
+        }
+        val connection = (URL(URL(baseUrl), path).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 15_000
+            readTimeout = 15_000
+            instanceFollowRedirects = false
+            useCaches = false
+            setRequestProperty("Accept", "application/json")
+            setRequestProperty("X-Requested-With", "AloAndroid")
+            setRequestProperty("Cookie", cookieHeader)
+            applyInstallIdentityHeader()
+            if (body != null) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+        }
+        try {
+            if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val status = connection.responseCode
+            val json = connection.readBodySafely().toJsonObject()
+            if (status !in 200..299) {
+                throw AloApiException(
+                    status = status,
+                    code = json.optString("code").takeIf { it.isNotBlank() },
+                    message = json.optString("error").ifBlank { "Ошибка сервера." },
+                    payload = json
+                )
+            }
+            json
+        } finally {
+            connection.disconnect()
+        }
     }
 
     /** A small picture for a notification (an avatar): /uploads needs the session cookie. Null when it cannot be had. */
@@ -3008,6 +3116,14 @@ class AloApiClient(
             ?: throw IllegalStateException("Сервер не вернул пост.")
     }
 
+    /** A post opened by the random code of its public link (https://ало.online/p/<code>). */
+    suspend fun loadPostByShareCode(code: String): AloPost {
+        require(AloDeepLinkTarget.isPostCode(code)) { "Пост не найден." }
+        val response = request(method = "GET", path = "/api/post-links/$code")
+        return parsePost(response.optJSONObject("post"))
+            ?: throw IllegalStateException("Сервер не вернул пост.")
+    }
+
     suspend fun resolvePushOpen(token: String): JSONObject {
         require(token.matches(Regex("[a-f0-9]{64}")))
         return request("GET", "/api/notifications/open/$token").getJSONObject("destination")
@@ -3042,13 +3158,21 @@ class AloApiClient(
         }
     }
 
+    /** Subscribe to a channel or unsubscribe (the server flips it); answers whether the viewer is subscribed now. */
+    suspend fun toggleChannelSubscription(channelId: Int): Boolean {
+        val response = request(method = "POST", path = "/api/channels/$channelId/subscribe")
+        return response.optBoolean("subscribed")
+    }
+
     suspend fun openPostDiscussion(postId: Int): AloPostDiscussion {
         val response = request(method = "POST", path = "/api/posts/$postId/discussion")
         val discussion = response.optJSONObject("discussion") ?: JSONObject()
         return AloPostDiscussion(
             roomId = discussion.optInt("roomId"),
             peerId = discussion.optInt("peerId"),
-            topicId = discussion.optInt("topicId")
+            topicId = discussion.optInt("topicId"),
+            commentCount = discussion.optInt("commentCount").coerceAtLeast(0),
+            post = parsePost(response.optJSONObject("post"))
         ).also {
             check(it.roomId > 0 && it.peerId > 0 && it.topicId > 0) {
                 "Сервер не вернул связанную тему обсуждения."
@@ -3517,18 +3641,24 @@ class AloApiClient(
     ): AloConversationDetail {
         val isGroup = kind == "group" || roomId > 0 || peerId >= GROUP_CHAT_PEER_OFFSET
         val resolvedRequestRoomId = groupRoomIdFrom(peerId = peerId, roomId = roomId)
-        val response = request(
-            method = "GET",
-            path = if (isGroup) {
-                if (resolvedRequestRoomId > 0) {
-                    "/api/group-chats/$resolvedRequestRoomId/messages"
+        val response = try {
+            request(
+                method = "GET",
+                path = if (isGroup) {
+                    if (resolvedRequestRoomId > 0) {
+                        "/api/group-chats/$resolvedRequestRoomId/messages"
+                    } else {
+                        "/api/messages/$peerId"
+                    }
                 } else {
-                    "/api/messages/$peerId"
+                    "/api/messages/$peerId" + if (markRead) "" else "?markRead=0"
                 }
-            } else {
-                "/api/messages/$peerId" + if (markRead) "" else "?markRead=0"
-            }
-        )
+            )
+        } catch (error: AloApiException) {
+            // That address is for members. A channel can be read before subscribing (as in Telegram): /api/messages shows it.
+            if (error.status != 404 || resolvedRequestRoomId <= 0) throw error
+            request(method = "GET", path = "/api/messages/${GROUP_CHAT_PEER_OFFSET + resolvedRequestRoomId}")
+        }
         decryptConversationResponse(response)
         attachCanonicalPollStates(response)
 
@@ -3570,7 +3700,9 @@ class AloApiClient(
                 forumTopics = parseForumTopics(room.optJSONArray("topics")),
                 forumTopicStates = parseForumTopicStates(room.optJSONArray("topicStates")),
                 pinnedMessageIds = parsePinnedMessageIds(room.optJSONArray("pinnedMessages")),
-                canonicalPolls = parseCanonicalPollStates(response.optJSONArray("polls"))
+                canonicalPolls = parseCanonicalPollStates(response.optJSONArray("polls")),
+                isMember = if (room.has("isMember")) room.optBoolean("isMember") else true,
+                feedChannelId = room.optInt("feedChannelId").coerceAtLeast(0)
             )
         }
 
@@ -3895,12 +4027,19 @@ class AloApiClient(
         )
     }
 
-    suspend fun loadBlockedUserIds(): Set<Int> {
+    suspend fun loadBlockedUserIds(): Set<Int> = loadBlockedUsers().first
+
+    /** Everyone this account blocked, with names and avatars: not only the people it has a chat with. */
+    suspend fun loadBlockedUsers(): Pair<Set<Int>, List<AloConversationPeer>> {
         val response = request(
             method = "GET",
             path = "/api/users/blocks"
         )
-        return parseBlockedUserIds(response)
+        val blocks = response.optJSONArray("blocks")
+        val peers = if (blocks == null) emptyList() else (0 until blocks.length()).mapNotNull { index ->
+            parseConversationPeer(blocks.optJSONObject(index)?.optJSONObject("user"))
+        }
+        return parseBlockedUserIds(response) to peers
     }
 
     suspend fun blockUser(userId: Int) {
@@ -4016,7 +4155,9 @@ class AloApiClient(
             },
             signMessages = channel.optBoolean("signMessages"),
             showAuthorProfiles = channel.optBoolean("showAuthorProfiles"),
-            discussionRoomId = channel.optInt("discussionRoomId")
+            discussionRoomId = channel.optInt("discussionRoomId"),
+            following = channel.optBoolean("subscribed"),
+            messengerRoomId = channel.optInt("messengerRoomId")
         )
         if (!viewedProfile.canManage) return viewedProfile
         val events = runCatching {
@@ -5755,6 +5896,16 @@ class AloApiClient(
         return parseCurrentUser(response.optJSONObject("user") ?: JSONObject())
     }
 
+    /** Alo Премиум pages (ui/AloPremium.kt): status, checkout, appearance; one minute for a slow payment service. */
+    suspend fun premiumRequest(method: String, path: String, body: JSONObject? = null): JSONObject =
+        request(method = method, path = path, body = body, readTimeoutMs = 60_000)
+
+    /** The header GIF (purpose "cover") or the profile track ("premium_music"); answers the stored /uploads path. */
+    suspend fun uploadPremiumFile(bytes: ByteArray, purpose: String, mime: String): String =
+        uploadAttachmentBytes(bytes = bytes, purpose = purpose, mime = mime).url
+
+    fun premiumMediaUrl(path: String): String = resolveUrl(path)
+
     /** Story and post media (iOS uploads them with purpose "post"). */
     suspend fun uploadPostMedia(bytes: ByteArray, mime: String): AloUploadedFile =
         uploadAttachmentBytes(bytes = bytes, purpose = "post", mime = mime)
@@ -6470,6 +6621,34 @@ class AloApiClient(
         )
     }
 
+    /** «Забыли пароль?»: a code to the address if such an account exists (the answer is the same either way). */
+    suspend fun forgotPassword(email: String, captchaToken: String? = null, resend: Boolean = false): CodeDispatchResult {
+        val body = JSONObject().put("email", email)
+        if (resend) body.put("resend", true) else body.putCaptchaToken(captchaToken)
+        val response = request(
+            method = "POST",
+            path = "/api/auth/forgot-password",
+            body = body
+        )
+        return CodeDispatchResult(
+            message = response.optString("message", "Если аккаунт существует, код отправлен."),
+            nextWaitSec = response.optInt("nextWaitSec", 0)
+        )
+    }
+
+    /** The code from the letter and a new password. Returns false when the account is blocked: password changed, no session. */
+    suspend fun resetPassword(email: String, code: String, password: String): Boolean {
+        val response = request(
+            method = "POST",
+            path = "/api/auth/reset-password",
+            body = JSONObject()
+                .put("email", email)
+                .put("code", code)
+                .put("password", password)
+        )
+        return response.optBoolean("signedIn", true)
+    }
+
     suspend fun logout() {
         runCatching {
             request(
@@ -6561,6 +6740,8 @@ class AloApiClient(
             }
 
             Log.d("AloApiClient", "HTTP $status $method ${safeLogUrl(fullUrl)}")
+            // Alo Премиум: remember who has it and how it looks (AloPremiumDirectory).
+            AloPremiumDirectory.absorb(json)
             json
         } catch (error: Exception) {
             Log.e("AloApiClient", "request failed $method $fullUrl", error)
@@ -8818,7 +8999,7 @@ class AloApiClient(
             val id = json.optInt("id")
             val scheduledMessageId = json.optInt("scheduledMessageId").coerceAtLeast(0)
             if (id == 0 || (id < 0 && scheduledMessageId <= 0)) continue
-            val rawBody = json.optString("body")
+            val rawBody = aloTameText(json.optString("body"))
             val explicitEntities = AloMessageMarkup.parseEntities(
                 json.optJSONArray("entities"),
                 rawBody.length
@@ -8863,6 +9044,8 @@ class AloApiClient(
                 channelPostId = json.optInt("channelPostId").coerceAtLeast(0),
                 channelPostCommentCount = json.optInt("channelPostCommentCount").coerceAtLeast(0),
                 channelPostCommentsEnabled = json.optBoolean("channelPostCommentsEnabled"),
+                channelPostRecentCommenters = parseConversationPeers(json.optJSONArray("channelPostRecentCommenters")).take(3),
+                channelPostHasUnreadComments = json.optBoolean("channelPostHasUnreadComments"),
                 scheduledMessageId = scheduledMessageId,
                 scheduledAt = json.optString("scheduledAt"),
                 sendWhenOnline = json.optBoolean("sendWhenOnline"),
@@ -9192,7 +9375,8 @@ class AloApiClient(
             createdAt = json.optString("createdAt"),
             author = author,
             feedReason = json.optString("feedReason"),
-            editedAt = json.optString("editedAt")
+            editedAt = json.optString("editedAt"),
+            shareCode = json.optString("shareCode")
         )
     }
 
@@ -9381,6 +9565,9 @@ class AloApiClient(
             }
         )
     }
+
+    fun parseConversationPeers(array: JSONArray?): List<AloConversationPeer> =
+        if (array == null) emptyList() else (0 until array.length()).mapNotNull { parseConversationPeer(array.optJSONObject(it)) }
 
     private fun parseConversationPeer(json: JSONObject?): AloConversationPeer? {
         if (json == null) return null

@@ -20,7 +20,13 @@ data class AloNativeAppUiState(
     val isGroupManagementLoading: Boolean = false,
     val activeChatAppearance: AloChatAppearance = AloChatAppearance(),
     val activeChatMuted: Boolean = false,
+    /** A channel post's comments, open as their own screen (Telegram): the post on top, «N комментариев» on top. */
+    val commentsThread: AloCommentsThread? = null,
+    /** The channel the comments were opened from: back from them returns to it, as in Telegram. */
+    val commentsReturnPeerId: Int = 0,
     val blockedUserIds: Set<Int> = emptySet(),
+    /** Names and avatars of the blocked people, from /api/users/blocks (the chat list knows only some of them). */
+    val blockedUserPeers: List<AloConversationPeer> = emptyList(),
     val blockActionUserId: Int? = null,
     val isChatPeerProfileOpen: Boolean = false,
     val activeViewedProfileTarget: AloProfileTarget? = null,
@@ -106,6 +112,10 @@ data class AloNativeAppUiState(
     val isSecuritySessionsLoading: Boolean = false,
     val securityNotice: String = "",
     val savedAccounts: List<AloStoredAccount> = emptyList(),
+    /** Unread messages of the other accounts saved on this phone (Telegram's account switcher), by user id. */
+    val accountUnread: Map<Int, Int> = emptyMap(),
+    /** The account switcher sheet (a hold on «Профиль», as on Telegram's Settings tab). */
+    val isAccountSwitcherOpen: Boolean = false,
     val isAccountSecurityLoading: Boolean = false,
     val passkeys: List<AloPasskey> = emptyList(),
     val isPasskeyLoading: Boolean = false,
@@ -168,4 +178,13 @@ data class AloQrLoginConfirmation(
     val ip: String,
     val deviceType: String,
     val isApproving: Boolean = false
+)
+
+/** A channel post's comments: the post's topic in the channel's discussion group. */
+data class AloCommentsThread(
+    val roomId: Int,
+    val topicId: Int,
+    val postId: Int,
+    val post: AloPost?,
+    val count: Int
 )

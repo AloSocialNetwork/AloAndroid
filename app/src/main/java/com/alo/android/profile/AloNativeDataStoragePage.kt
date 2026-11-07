@@ -77,7 +77,7 @@ internal fun DataStorageSettingsPage() {
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+        contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         item {

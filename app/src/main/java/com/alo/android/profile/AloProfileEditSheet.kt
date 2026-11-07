@@ -17,8 +17,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 
-private const val NameMaxLength = 50
-private const val BioMaxLength = 160
+private const val NameMaxLength = 30
+private const val BioMaxLength = 70
 private const val UsernameMinLength = 3
 private const val UsernameMaxLength = 32
 
@@ -53,7 +53,7 @@ internal fun AloProfileEditSheet(me: AloCurrentUser, onDismiss: () -> Unit, onAc
         },
         fullHeight = false
     ) {
-        AloFormSection(header = "Имя", footer = if (nameOk) null else "Имя не короче двух символов.") {
+        AloFormSection(header = "Имя", footer = if (nameOk) "${name.length} из $NameMaxLength" else "Имя не короче двух символов.") {
             AloFormTextField(value = name, onChange = { name = it.take(NameMaxLength) }, placeholder = "Имя")
         }
         AloFormSection(header = "Имя пользователя", footer = "От $UsernameMinLength символов: латинские буквы, цифры и «_». По нему вас находят и упоминают.") {

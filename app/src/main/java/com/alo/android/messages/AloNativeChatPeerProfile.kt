@@ -109,6 +109,8 @@ internal fun ChatPeerProfilePane(
     currentAppearance: AloChatAppearance,
     isMuted: Boolean,
     isPeerBlocked: Boolean,
+    /** Opened by the search button under a channel: the search sheet shows at once. */
+    startsWithSearch: Boolean = false,
     onBack: () -> Unit,
     onInteractiveBack: () -> Unit,
     onOpenFullProfile: () -> Unit,
@@ -166,7 +168,7 @@ internal fun ChatPeerProfilePane(
         mutableStateOf(false)
     }
     var isSearchSheetOpen by rememberSaveable(detail.peerId) {
-        mutableStateOf(false)
+        mutableStateOf(startsWithSearch)
     }
     var isAutoDeleteDialogOpen by rememberSaveable(detail.peerId) {
         mutableStateOf(false)

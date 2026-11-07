@@ -81,6 +81,14 @@ internal fun aloMentionQuery(text: String): String? {
     return handle
 }
 
+/**
+ * Adds a new comment, or replaces it when it is already in the list. The realtime event and the reply to «Отправить» both
+ * bring the same comment, in either order; appending it twice gave two list items with one key and the app fell
+ * («Key "c-…" was already used», 0.1.5–0.1.7).
+ */
+internal fun aloUpsertComment(comments: List<AloPostComment>, comment: AloPostComment): List<AloPostComment> =
+    if (comments.any { it.id == comment.id }) comments.map { if (it.id == comment.id) comment else it } else comments + comment
+
 internal fun aloInsertMention(username: String, text: String): String {
     val at = text.lastIndexOf('@')
     return if (aloMentionQuery(text) != null && at >= 0) text.substring(0, at) + "@$username " else "$text@$username "
@@ -115,23 +123,25 @@ internal fun AloPostDetailPage(
     onOpenMediaGallery: (List<AloMediaItem>, Int) -> Unit
 ) {
     BackHandler(onBack = onBack)
+    // One row per comment id, whatever the list brings: LazyColumn falls on a repeated key.
+    val shown = remember(comments) { comments.distinctBy { it.id } }
     val clipboard = LocalClipboardManager.current
     var expandedThreads by remember { mutableStateOf(setOf<Int>()) }
     var menuFor by remember { mutableStateOf<AloPostComment?>(null) }
-    val ids = comments.map { it.id }.toSet()
-    val roots = comments.filter { it.parentId == 0 || it.parentId !in ids }
+    val ids = shown.map { it.id }.toSet()
+    val roots = shown.filter { it.parentId == 0 || it.parentId !in ids }
     val listState = rememberLazyListState()
-    val focused = comments.firstOrNull { it.id == focusCommentId }
-    LaunchedEffect(focusCommentId, comments) {
+    val focused = shown.firstOrNull { it.id == focusCommentId }
+    LaunchedEffect(focusCommentId, shown) {
         focused?.let { if (it.parentId > 0) expandedThreads = expandedThreads + it.parentId }
     }
-    LaunchedEffect(focusCommentId, comments, expandedThreads) {
+    LaunchedEffect(focusCommentId, shown, expandedThreads) {
         if (focused == null) return@LaunchedEffect
         val keys = buildList {
             if (post != null) { add("post"); add("heading") }
             roots.forEach { root ->
                 add("c-${root.id}")
-                val thread = comments.filter { it.parentId == root.id }
+                val thread = shown.filter { it.parentId == root.id }
                 if (thread.isNotEmpty()) {
                     if (root.id in expandedThreads) thread.forEach { add("c-${it.id}") }
                     add("t-${root.id}")
@@ -190,7 +200,7 @@ internal fun AloPostDetailPage(
                         CircularProgressIndicator(color = AloNativeAppAccent)
                     }
                 }
-                comments.isEmpty() -> item(key = "empty") {
+                shown.isEmpty() -> item(key = "empty") {
                     Column(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text("Комментариев пока нет", color = AloNativeAppText, fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
                         Text("Будь первым в обсуждении.", color = AloNativeAppMuted, fontSize = 15.sp)
@@ -203,7 +213,7 @@ internal fun AloPostDetailPage(
                             onAuthor = { onOpenAuthorProfile(root.author) }, onDelete = { onDeleteComment(root) },
                             onLongPress = { menuFor = root }, onOpenMedia = onOpenMediaGallery)
                     }
-                    val thread = comments.filter { it.parentId == root.id }
+                    val thread = shown.filter { it.parentId == root.id }
                     if (thread.isNotEmpty()) {
                         val open = root.id in expandedThreads
                         if (open) {

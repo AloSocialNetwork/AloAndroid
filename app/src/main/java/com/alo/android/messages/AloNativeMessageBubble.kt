@@ -17,6 +17,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.layout.layout
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import android.os.SystemClock
@@ -344,6 +348,7 @@ internal fun MessageBubble(
             if (nameAboveBubble && groupSender != null) {
                 GroupSenderNameRow(
                     name = groupSender.name,
+                    userId = if (message.senderIsAnonymous) 0 else groupSender.id,
                     roleLabel = senderRoleLabel,
                     color = senderNameColor,
                     roleAtRightEnd = false,
@@ -469,6 +474,7 @@ internal fun MessageBubble(
                             if (nameInsideBubble && groupSender != null) {
                                 GroupSenderNameRow(
                                     name = groupSender.name,
+                                    userId = if (message.senderIsAnonymous) 0 else groupSender.id,
                                     roleLabel = senderRoleLabel,
                                     color = senderNameColor,
                                     roleAtRightEnd = roleAtRightEnd,
@@ -782,26 +788,90 @@ internal fun MessageBubble(
                                 message.channelPostCommentsEnabled &&
                                 callLogMeta == null
                             ) {
-                                Row(
+                                // Telegram's comments row (ChatMessageCommentFooterContentNode, same numbers on every Alo
+                                // client): 42dp under a hairline that spans the bubble, 24dp icon 15dp from the bubble's
+                                // edge, 17sp label at 50dp, 24dp disclosure arrow 9dp from the right edge.
+                                val commentsInk = if (isOutgoing && !outgoingBubbleIsLight) Color.White else AloNativeChatAccentBlue
+                                val bleed = when {
+                                    compactVisualBubble -> 3.dp
+                                    isVoice -> 10.dp
+                                    else -> 11.dp
+                                }
+                                Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(top = 8.dp)
+                                        .padding(top = 4.dp)
+                                        .channelCommentsBleed(bleed, bottom = if (compactVisualBubble) 3.dp else if (isVoice) 6.dp else 7.dp)
+                                        .height(42.dp)
                                         .clickable { onOpenDiscussion(message.channelPostId) }
-                                        .padding(vertical = 5.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.ChatBubbleOutline,
-                                        contentDescription = null,
-                                        tint = if (isOutgoing && !outgoingBubbleIsLight) Color.White.copy(alpha = 0.88f) else AloNativeChatAccentBlue,
-                                        modifier = Modifier.size(15.dp)
+                                    Box(
+                                        modifier = Modifier
+                                            .align(Alignment.TopCenter)
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 1.dp)
+                                            .height(0.5.dp)
+                                            .background(commentsInk.copy(alpha = 0.16f))
                                     )
-                                    Text(
-                                        text = channelDiscussionLabel(message.channelPostCommentCount),
-                                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold),
-                                        color = if (isOutgoing && !outgoingBubbleIsLight) Color.White.copy(alpha = 0.88f) else AloNativeChatAccentBlue
-                                    )
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(start = 15.dp, end = 9.dp, bottom = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        if (message.channelPostRecentCommenters.isEmpty()) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.ChatBubbleOutline,
+                                                contentDescription = null,
+                                                tint = commentsInk,
+                                                modifier = Modifier.size(24.dp).padding(2.dp)
+                                            )
+                                        } else {
+                                            // Telegram: the latest commenters' avatars (30dp, 20dp apart, from 13dp) in place of the icon.
+                                            Row(
+                                                modifier = Modifier.offset(x = (-2).dp),
+                                                horizontalArrangement = Arrangement.spacedBy((-10).dp)
+                                            ) {
+                                                message.channelPostRecentCommenters.forEachIndexed { index, person ->
+                                                    AvatarBadge(
+                                                        modifier = Modifier
+                                                            .zIndex((3 - index).toFloat())
+                                                            .border(2.dp, bubbleColor, CircleShape),
+                                                        name = person.name,
+                                                        avatarUrl = person.avatarUrl,
+                                                        verified = false,
+                                                        size = 30.dp,
+                                                        colorSeed = person.id.toString()
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Text(
+                                            text = channelDiscussionLabel(message.channelPostCommentCount),
+                                            fontSize = 17.sp,
+                                            fontWeight = FontWeight.Normal,
+                                            color = commentsInk,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.padding(start = 11.dp)
+                                        )
+                                        if (message.channelPostHasUnreadComments) {
+                                            Box(
+                                                Modifier
+                                                    .padding(start = 6.dp)
+                                                    .size(6.dp)
+                                                    .clip(CircleShape)
+                                                    .background(commentsInk)
+                                            )
+                                        }
+                                        Spacer(Modifier.weight(1f).padding(end = 8.dp))
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                            contentDescription = null,
+                                            tint = commentsInk,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                 }
                             }
 
@@ -1299,26 +1369,26 @@ private fun GroupSenderNameRow(
     color: Color,
     roleAtRightEnd: Boolean,
     onClick: (() -> Unit)?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** Alo Премиум: the sender's own colour and star or emoji status (0 for an anonymous admin). */
+    userId: Int = 0
 ) {
     Row(
         modifier = if (roleAtRightEnd) modifier.fillMaxWidth() else modifier,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
+        AloPremiumName(
             text = name,
+            userId = userId,
+            fontSize = AloGroupMessageMetrics.NameSize,
+            lineHeight = AloGroupMessageMetrics.NameLineHeight,
+            fontWeight = FontWeight.Medium,
+            color = color,
             modifier = Modifier
                 .weight(1f, fill = roleAtRightEnd)
-                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
-            style = TextStyle(
-                fontSize = AloGroupMessageMetrics.NameSize,
-                lineHeight = AloGroupMessageMetrics.NameLineHeight,
-                fontWeight = FontWeight.Medium
-            ),
-            color = color,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+                .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
         )
+        if (userId > 0) Box(Modifier.padding(start = 3.dp)) { AloPremiumMark(userId, 13.dp) }
         if (roleLabel.isNotBlank()) {
             Text(
                 text = roleLabel,
@@ -1809,8 +1879,26 @@ private fun MessageReactionBadge(
     )
 }
 
+/** Lets the comments row reach both sides of the bubble past its text padding, as in Telegram. */
+private fun Modifier.channelCommentsBleed(
+    inset: androidx.compose.ui.unit.Dp,
+    bottom: androidx.compose.ui.unit.Dp
+): Modifier = layout { measurable, constraints ->
+    val extra = inset.roundToPx() * 2
+    val below = bottom.roundToPx()
+    if (!constraints.hasBoundedWidth) {
+        val placeable = measurable.measure(constraints)
+        return@layout layout(placeable.width, placeable.height) { placeable.place(0, 0) }
+    }
+    val placeable = measurable.measure(
+        constraints.copy(minWidth = constraints.minWidth + extra, maxWidth = constraints.maxWidth + extra)
+    )
+    // The row also covers the bubble's bottom padding, so it ends at the bubble's edge.
+    layout(placeable.width - extra, (placeable.height - below).coerceAtLeast(0)) { placeable.place(-extra / 2, 0) }
+}
+
 private fun channelDiscussionLabel(count: Int): String {
-    if (count <= 0) return "Обсудить"
+    if (count <= 0) return "Прокомментировать"
     val word = when {
         count % 100 in 11..14 -> "комментариев"
         count % 10 == 1 -> "комментарий"

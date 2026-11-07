@@ -195,7 +195,8 @@ internal fun AloTimelinePostRow(
                     verified = false,
                     size = 42.dp,
                     colorSeed = post.author.id.toString(),
-                    onClick = onAuthor
+                    onClick = onAuthor,
+                    modifier = Modifier.aloPremiumFrame(if (post.author.isChannel) 0 else post.author.id, 42.dp)
                 )
             }
             Column(modifier = Modifier.weight(1f)) {
@@ -208,18 +209,17 @@ internal fun AloTimelinePostRow(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        Text(
+                        AloPremiumName(
                             text = post.author.name,
-                            color = AloNativeAppText,
+                            userId = if (post.author.isChannel) 0 else post.author.id,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.widthIn(max = 180.dp)
                         )
                         if (post.author.verified) {
                             Icon(Icons.Rounded.Verified, null, tint = AloNativeAppAccent, modifier = Modifier.size(14.dp))
                         }
+                        AloPremiumMark(if (post.author.isChannel) 0 else post.author.id, 14.dp)
                         Text(
                             text = listOf(
                                 post.author.username.takeIf { it.isNotBlank() }?.let { "@$it" },
@@ -252,7 +252,7 @@ internal fun AloTimelinePostRow(
                         ) {
                             AloMenuItem("Скопировать ссылку", Icons.Rounded.Link) {
                                 menuOpen = false
-                                clipboard.setText(AnnotatedString(buildAloLink("p", post.id.toString())))
+                                clipboard.setText(AnnotatedString(AloDeepLinkTarget.postUrl(post)))
                             }
                             val editPost = LocalAloPostEditor.current
                             if (isMine && editPost != null) {

@@ -21,6 +21,8 @@
 #-renamesourcefileattribute SourceFile
 # AloNativeVideoCircleRecorder sets the MPEG-4 (AAC audio) output format on CameraX's recorder builder by reflection.
 -keepclassmembers class androidx.camera.video.Recorder$Builder { *** mMediaSpecBuilder; }
+# It also reads Recorder.mVideoEncoder to know when a camera flip mid-circle has finished (stop is deferred until then).
+-keepclassmembers class androidx.camera.video.Recorder { *** mVideoEncoder; }
 
 # R8 is here for speed and size, not to hide the code: names stay, so reports of crashes on people's phones
 # (AloCrashReporter) read as they are, without a mapping file per release.

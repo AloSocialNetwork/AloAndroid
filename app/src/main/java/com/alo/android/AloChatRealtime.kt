@@ -111,6 +111,8 @@ sealed interface AloUnifiedUpdateAction {
     data class ApplyChatPins(val pinned: List<String>?) : AloUnifiedUpdateAction
 
     data class ApplyPost(val isNew: Boolean) : AloUnifiedUpdateAction
+    /** Someone commented under a channel post: «N комментариев», the avatars and the dot change at once. */
+    data class ApplyChannelPostComments(val data: JSONObject) : AloUnifiedUpdateAction
     data class DeletePost(val postId: Int) : AloUnifiedUpdateAction
     data class ApplyComment(val postId: Int, val isNew: Boolean) : AloUnifiedUpdateAction
     data class DeleteComment(val postId: Int, val commentId: Int) : AloUnifiedUpdateAction
@@ -244,6 +246,7 @@ object AloUnifiedUpdateRouter {
     private fun channelAction(payload: JSONObject): AloUnifiedUpdateAction {
         val data = payload.optJSONObject("data") ?: JSONObject()
         return when (payload.optString("type")) {
+            "channel_post_comments" -> AloUnifiedUpdateAction.ApplyChannelPostComments(data)
             "channel_upsert" -> {
                 val channelId = data
                     .optJSONObject("profile")

@@ -110,8 +110,9 @@ object AloMessageNotifications {
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 
     /** Called from FirebaseMessagingService.onMessageReceived (a background thread with ~10 s to finish). */
-    fun handle(context: Context, data: Map<String, String>, fcmMessageId: String?) {
+    fun handle(context: Context, incoming: Map<String, String>, fcmMessageId: String?) {
         if (!canNotify(context)) return
+        val data = withAccount(context, incoming) ?: return
         // An exception here would kill the app for a mere push; whatever failed, the person still gets the line.
         runCatching {
             createChannels(context)
@@ -125,6 +126,33 @@ object AloMessageNotifications {
             Log.w(TAG, "Rich notification failed, showing a plain one", error)
             runCatching { showPlain(context, data, fcmMessageId) }
         }
+    }
+
+    // The phone may hold several accounts (AloAccountSwitcher). A push names its account (accountId): one this phone has
+    // signed out of shows nothing; with several accounts the notification says whose it is, as Telegram does; a push of
+    // an account that is not open now gets no «Ответить»/«Прочитано» (they would act as the open one) and its tap
+    // switches the app to that account.
+    private const val KEY_ACCOUNT_LABEL = "_accountLabel"
+    private const val KEY_FOREIGN = "_foreign"
+
+    private fun withAccount(context: Context, data: Map<String, String>): Map<String, String>? {
+        val id = data["accountId"]?.toIntOrNull() ?: 0
+        if (id <= 0) return data
+        val store = runCatching { AloSecureAccountStore(context.applicationContext) }.getOrNull() ?: return data
+        val accounts = runCatching { store.accounts() }.getOrDefault(emptyList())
+        if (accounts.isEmpty()) return data
+        val account = accounts.firstOrNull { it.userId == id } ?: return null
+        val active = store.activeAccountId()
+        return data + buildMap {
+            if (accounts.size > 1) put(KEY_ACCOUNT_LABEL, account.displayName)
+            if (active > 0 && active != id) put(KEY_FOREIGN, "1")
+        }
+    }
+
+    private fun isForeign(data: Map<String, String>) = data[KEY_FOREIGN] == "1"
+
+    private fun NotificationCompat.Builder.forAccount(data: Map<String, String>): NotificationCompat.Builder = apply {
+        data[KEY_ACCOUNT_LABEL]?.takeIf(String::isNotBlank)?.let { setSubText(it) }
     }
 
     private fun showPlain(context: Context, data: Map<String, String>, fcmMessageId: String?) {
@@ -151,6 +179,7 @@ object AloMessageNotifications {
             data["payloadVersion"]?.let { putExtra("payloadVersion", it) }
             data["type"]?.let { putExtra("type", it) }
             data["callId"]?.let { putExtra("callId", it) }
+            data["accountId"]?.let { putExtra("accountId", it) }
         }
         return PendingIntent.getActivity(
             context, requestCode, intent,
@@ -163,7 +192,8 @@ object AloMessageNotifications {
         val peerId = data["peerId"]?.toIntOrNull() ?: 0
         val roomId = data["roomId"]?.toIntOrNull() ?: 0
         if (peerId <= 0 && roomId <= 0) return showEvent(context, data, null)
-        val key = chatKey(chatKind, peerId, roomId)
+        // The same chat id in another account of the phone is another chat.
+        val key = chatKey(chatKind, peerId, roomId) + if (isForeign(data)) "@${data["accountId"]}" else ""
         if (foregroundChatKey?.invoke() == key) return
         val id = notificationIdFor(key)
         val title = data["title"].orEmpty().ifBlank { "Alo" }
@@ -236,7 +266,8 @@ object AloMessageNotifications {
                 putString(EXTRA_CHAT_KEY, key)
                 putInt(EXTRA_COUNT, count)
             })
-        if (!channel) {
+        builder.forAccount(data)
+        if (!channel && !isForeign(data)) {
             val reply = RemoteInput.Builder(KEY_REPLY).setLabel("Сообщение").build()
             val replyIntent = Intent(context, AloNotificationActionReceiver::class.java).apply {
                 action = ACTION_REPLY
@@ -259,9 +290,15 @@ object AloMessageNotifications {
             )
         }
         // «Прочитано» (Telegram's MarkAsRead): the chat is read on the server and its notification goes.
+        if (!isForeign(data)) addMarkRead(context, builder, group || channel, roomId, peerId, id)
+        runCatching { manager.notify(id, builder.build()) }
+        updateSummary(context)
+    }
+
+    private fun addMarkRead(context: Context, builder: NotificationCompat.Builder, group: Boolean, roomId: Int, peerId: Int, id: Int) {
         val readIntent = Intent(context, AloNotificationActionReceiver::class.java).apply {
             action = ACTION_MARK_READ
-            putExtra("chatKind", if (group || channel) "group" else "direct")
+            putExtra("chatKind", if (group) "group" else "direct")
             putExtra("peerId", if (roomId > 0) GROUP_PEER_OFFSET + roomId else peerId)
             putExtra("roomId", roomId)
             putExtra("notificationId", id)
@@ -275,8 +312,6 @@ object AloMessageNotifications {
                 .setShowsUserInterface(false)
                 .build()
         )
-        runCatching { manager.notify(id, builder.build()) }
-        updateSummary(context)
     }
 
     // A secret chat: Telegram's NotificationHiddenMessage — no name, no text, one notification for all of them.
@@ -298,6 +333,7 @@ object AloMessageNotifications {
             .setGroup(GROUP_KEY)
             .setContentIntent(openIntent(context, data, SECRET_ID))
             .addExtras(Bundle().apply { putInt(EXTRA_COUNT, count) })
+            .forAccount(data)
             .build()
         runCatching { NotificationManagerCompat.from(context).notify(SECRET_ID, notification) }
         updateSummary(context)
@@ -321,6 +357,7 @@ object AloMessageNotifications {
             .setSilent(silent)
             .setAutoCancel(true)
             .setContentIntent(openIntent(context, data, id))
+            .forAccount(data)
             .build()
         runCatching { NotificationManagerCompat.from(context).notify(id, notification) }
     }
@@ -343,6 +380,8 @@ object AloMessageNotifications {
             Intent(context, AloNotificationActionReceiver::class.java).apply {
                 action = ACTION_DECLINE_CALL
                 putExtra("callId", callId)
+                // Another account of the phone: declining here would end it as the open account, so it only goes quiet.
+                putExtra("localOnly", isForeign(data))
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -360,6 +399,7 @@ object AloMessageNotifications {
             .setOngoing(true)
             .setAutoCancel(true)
             .setTimeoutAfter(60_000)
+            .forAccount(data)
             .build()
         runCatching { NotificationManagerCompat.from(context).notify(id, notification) }
     }
@@ -593,7 +633,9 @@ class AloNotificationActionReceiver : BroadcastReceiver() {
                 val callId = intent.getIntExtra("callId", 0)
                 AloMessageNotifications.cancelCall(appContext, callId)
                 scope.launch {
-                    if (callId > 0) runCatching { AloPushRegistration.backgroundClient(appContext).endDirectCall(callId, "declined") }
+                    if (callId > 0 && !intent.getBooleanExtra("localOnly", false)) {
+                        runCatching { AloPushRegistration.backgroundClient(appContext).endDirectCall(callId, "declined") }
+                    }
                     pending.finish()
                 }
             }

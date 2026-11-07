@@ -46,6 +46,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
@@ -54,18 +56,27 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// The settings rows of iOS's ProfileView: cards of 18pt corners with 14pt insets, 16pt titles over
-// 13pt grey subtitles, tinted icon tiles, menus with ⌃⌄ and the iOS 26 switch.
+// The settings rows of the website (web/css/base.css .group/.cell, views.css .settings-me): cards of 22 corners
+// 20 from the screen edge, uppercase 13 grey group titles, 52 rows with 16 insets, 30 colour tiles of 8 corners,
+// 17 titles over 14 grey subtitles, hairlines from 54 (16 without a tile), a faint chevron, the iOS 26 switch.
 
-internal val settingsRowInset = 14.dp
+internal val settingsRowInset = 16.dp
+/** The website's --gutter: cards keep this distance from the screen edges. */
+internal val settingsPageGutter = 20.dp
+/** Where a hairline starts under a row with a tile (16 inset + 30 tile + 8). */
+internal val settingsTileDividerStart = 54.dp
+
+/** The website's --text-3: chevrons and the faintest text. */
+internal val AloSettingsFaint: Color
+    @Composable get() = AloNativeAppMuted.copy(alpha = AloNativeAppMuted.alpha * 0.68f)
 
 private val isDarkSettings: Boolean
     @Composable get() = AloNativeAppBackground.luminance() < 0.3f
 
 /** A card's rows each end with a hairline; the card cuts the last one off, as iOS lists only separate. */
 @Composable
-internal fun SettingsDivider() {
-    Box(Modifier.padding(horizontal = settingsRowInset).fillMaxWidth().height(0.5.dp).background(AloNativeAppSeparator))
+internal fun SettingsDivider(start: Dp = settingsRowInset) {
+    Box(Modifier.padding(start = start).fillMaxWidth().height(0.5.dp).background(AloNativeAppSeparator))
 }
 
 private fun Modifier.trimLastHairline(): Modifier = layout { measurable, constraints ->
@@ -77,53 +88,121 @@ private fun Modifier.trimLastHairline(): Modifier = layout { measurable, constra
 @Composable
 internal fun SettingsSection(
     title: String,
-    /** The security page's smaller 14pt card titles. */
+    /** Kept for older callers: every group title now has the website's one size. */
     compactTitle: Boolean = false,
+    /** The website's .group-note: grey text under the card. */
+    note: String = "",
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(Modifier.fillMaxWidth()) {
         if (title.isNotBlank()) {
             Text(
-                text = title,
-                modifier = Modifier.padding(start = 2.dp),
+                text = title.uppercase(),
+                modifier = Modifier.padding(start = 16.dp, bottom = 8.dp, top = 4.dp),
                 color = AloNativeAppMuted,
-                fontSize = if (compactTitle) 14.sp else 17.sp,
-                fontWeight = FontWeight.SemiBold
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.26.sp
             )
         }
         Column(
-            Modifier.fillMaxWidth().clip(AloSquircle(18.dp)).background(AloNativeAppSurface).trimLastHairline(),
+            Modifier.fillMaxWidth().clip(AloSquircle(22.dp)).background(AloNativeAppSurface).trimLastHairline(),
             content = content
         )
+        if (note.isNotBlank()) {
+            Text(
+                text = note,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+                color = AloNativeAppMuted,
+                fontSize = 13.sp,
+                lineHeight = 17.5.sp
+            )
+        }
     }
 }
 
-/** The root page's rows: a plain 17pt symbol and title, no chevron. */
+/** The website's .cell-icon: a 30 tile of 8 corners in the row's colour, a white 18 symbol. */
+@Composable
+internal fun SettingsIconTile(icon: ImageVector, tint: Color, brush: Brush? = null) {
+    Box(
+        Modifier.size(30.dp).clip(AloSquircle(8.dp)).then(if (brush != null) Modifier.background(brush) else Modifier.background(tint)),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp))
+    }
+}
+
+/**
+ * The website's .cell: an optional tile, a 17 title over a 14 grey subtitle, an optional value and a faint chevron.
+ * Rows of one card share the hairline between them, from 54 under a tile and from 16 without.
+ */
+@Composable
+internal fun SettingsCell(
+    title: String,
+    subtitle: String = "",
+    icon: ImageVector? = null,
+    iconTint: Color = AloNativeAppAccent,
+    iconBrush: Brush? = null,
+    /** Grey text before the chevron (the current theme). */
+    detail: String? = null,
+    /** Larger text at the end (the favourite reaction's emoji). */
+    value: String? = null,
+    titleColor: Color = AloNativeAppText,
+    centered: Boolean = false,
+    showsChevron: Boolean = true,
+    enabled: Boolean = true,
+    onClick: (() -> Unit)?
+) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
+                .heightIn(min = 52.dp)
+                .padding(horizontal = settingsRowInset, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (icon != null) SettingsIconTile(icon, iconTint, iconBrush)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    title,
+                    color = if (enabled) titleColor else AloNativeAppMuted,
+                    fontSize = 17.sp,
+                    fontWeight = if (centered) FontWeight.SemiBold else FontWeight.Normal,
+                    textAlign = if (centered) TextAlign.Center else TextAlign.Start,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (subtitle.isNotEmpty()) {
+                    Text(subtitle, color = AloNativeAppMuted, fontSize = 14.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (value != null) Text(value, fontSize = 22.sp)
+            if (detail != null) Text(detail, color = AloNativeAppMuted, fontSize = 16.sp)
+            if (showsChevron && onClick != null && !centered) SettingsChevron()
+        }
+        SettingsDivider(if (icon != null) settingsTileDividerStart else settingsRowInset)
+    }
+}
+
+/** The root page's rows, as the website's settings: a colour tile, a title, a grey subtitle and a chevron. */
 @Composable
 internal fun RootSettingsRow(
     icon: ImageVector,
     title: String,
     onClick: () -> Unit,
-    /** Shown at the right end, as iOS's «Любимая реакция» shows its emoji. */
+    iconTint: Color = AloNativeAppAccent,
+    subtitle: String = "",
+    /** Shown at the right end, as «Любимая реакция» shows its emoji. */
     value: String? = null,
     /** Grey text before the chevron, as «Оформление» shows the current theme. */
-    detail: String? = null
+    detail: String? = null,
+    iconBrush: Brush? = null
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 44.dp).padding(horizontal = settingsRowInset),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.width(22.dp), contentAlignment = Alignment.Center) {
-                Icon(icon, null, tint = AloNativeAppText, modifier = Modifier.size(20.dp))
-            }
-            Text(title, color = AloNativeAppText, fontSize = 17.sp, modifier = Modifier.weight(1f))
-            if (value != null) Text(value, fontSize = 24.sp)
-            if (detail != null) Text(detail, color = AloNativeAppMuted, fontSize = 16.sp)
-        }
-        SettingsDivider()
-    }
+    SettingsCell(
+        title = title, subtitle = subtitle, icon = icon, iconTint = iconTint, iconBrush = iconBrush,
+        detail = detail, value = value, onClick = onClick
+    )
 }
 
 /** iOS's infoRow: a title and grey text on their own card. */
@@ -133,20 +212,20 @@ internal fun SettingsInfoRow(
     value: String
 ) {
     Column(
-        Modifier.fillMaxWidth().clip(AloSquircle(16.dp)).background(AloNativeAppSurface).padding(14.dp),
-        verticalArrangement = Arrangement.spacedBy(5.dp)
+        Modifier.fillMaxWidth().clip(AloSquircle(22.dp)).background(AloNativeAppSurface).padding(horizontal = settingsRowInset, vertical = 14.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp)
     ) {
-        Text(title, color = AloNativeAppText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-        Text(value.ifBlank { "—" }, color = AloNativeAppMuted, fontSize = 13.5.sp)
+        Text(title, color = AloNativeAppText, fontSize = 17.sp)
+        Text(value.ifBlank { "—" }, color = AloNativeAppMuted, fontSize = 14.sp)
     }
 }
 
 @Composable
-internal fun SettingsChevron(size: Int = 18) {
-    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = AloNativeAppMuted, modifier = Modifier.size(size.dp))
+internal fun SettingsChevron(size: Int = 20) {
+    Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, null, tint = AloSettingsFaint, modifier = Modifier.size(size.dp))
 }
 
-/** iOS's settingsActionRow: a 34pt tinted tile, a 16pt title, a grey subtitle and a chevron. */
+/** A tile, a title, a grey subtitle and a chevron: the website's settings row. */
 @Composable
 internal fun SettingsNavRow(
     icon: ImageVector,
@@ -156,30 +235,10 @@ internal fun SettingsNavRow(
     enabled: Boolean = true,
     onClick: () -> Unit
 ) {
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(enabled = enabled, onClick = onClick)
-                .heightIn(min = 66.dp)
-                .padding(horizontal = settingsRowInset, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.size(34.dp).clip(AloSquircle(10.dp)).background(iconTint), contentAlignment = Alignment.Center) {
-                Icon(icon, null, tint = Color.White, modifier = Modifier.size(19.dp))
-            }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(title, color = AloNativeAppText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                Text(subtitle, color = AloNativeAppMuted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            SettingsChevron()
-        }
-        SettingsDivider()
-    }
+    SettingsCell(title = title, subtitle = subtitle, icon = icon, iconTint = iconTint, enabled = enabled, onClick = onClick)
 }
 
-/** iOS's AloSecurityRow: the symbol on a faint tile of its own colour. */
+/** The security page's rows, as on the website: a colour tile, title, subtitle, an optional badge and a chevron. */
 @Composable
 internal fun SettingsSecurityRow(
     icon: ImageVector,
@@ -196,22 +255,20 @@ internal fun SettingsSecurityRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (onClick != null) Modifier.clickable(enabled = enabled, onClick = onClick) else Modifier)
-                .heightIn(min = 66.dp)
+                .heightIn(min = 52.dp)
                 .padding(horizontal = settingsRowInset, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(Modifier.size(34.dp).clip(AloSquircle(10.dp)).background(tint.copy(alpha = 0.14f)), contentAlignment = Alignment.Center) {
-                Icon(icon, null, tint = tint, modifier = Modifier.size(19.dp))
+            SettingsIconTile(icon, tint)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, color = if (enabled) AloNativeAppText else AloNativeAppMuted, fontSize = 17.sp)
+                if (subtitle.isNotEmpty()) Text(subtitle, color = AloNativeAppMuted, fontSize = 14.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(title, color = AloNativeAppText, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                if (subtitle.isNotEmpty()) Text(subtitle, color = AloNativeAppMuted, fontSize = 13.5.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            if (trailing != null) Text(trailing, color = AloNativeAppAccent, fontSize = 12.5.sp, fontWeight = FontWeight.SemiBold)
-            if (showsChevron) SettingsChevron(17)
+            if (trailing != null) Text(trailing, color = AloNativeAppAccent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            if (showsChevron) SettingsChevron()
         }
-        SettingsDivider()
+        SettingsDivider(settingsTileDividerStart)
     }
 }
 
@@ -220,14 +277,14 @@ internal fun SettingsSecurityRow(
 internal fun SettingsTextButtonRow(title: String, enabled: Boolean = true, destructive: Boolean = false, onClick: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Box(
-            Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).heightIn(min = 42.dp).padding(horizontal = settingsRowInset),
-            contentAlignment = Alignment.CenterStart
+            Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onClick).heightIn(min = 52.dp).padding(horizontal = settingsRowInset),
+            contentAlignment = if (destructive) Alignment.Center else Alignment.CenterStart
         ) {
             Text(
                 title,
-                color = if (!enabled) AloNativeAppMuted else if (destructive) Color(0xFFFF5C68) else AloNativeAppAccent,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold
+                color = if (!enabled) AloNativeAppMuted else if (destructive) Color(0xFFFF4D5F) else AloNativeAppAccent,
+                fontSize = 17.sp,
+                fontWeight = if (destructive) FontWeight.SemiBold else FontWeight.Normal
             )
         }
         SettingsDivider()
@@ -239,12 +296,12 @@ internal fun SettingsTextButtonRow(title: String, enabled: Boolean = true, destr
 internal fun SettingsInfoValueRow(title: String, value: String) {
     Column(Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = settingsRowInset, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = settingsRowInset, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(title, color = AloNativeAppText, fontSize = 16.sp, modifier = Modifier.weight(1f))
-            Text(value, color = AloNativeAppMuted, fontSize = 16.sp)
+            Text(title, color = AloNativeAppText, fontSize = 17.sp, modifier = Modifier.weight(1f))
+            Text(value, color = AloNativeAppMuted, fontSize = 17.sp)
         }
         SettingsDivider()
     }
@@ -254,7 +311,7 @@ internal fun SettingsInfoValueRow(title: String, value: String) {
 @Composable
 internal fun SettingsNoteRow(text: String) {
     Column(Modifier.fillMaxWidth()) {
-        Text(text, color = AloNativeAppMuted, fontSize = 13.5.sp, modifier = Modifier.padding(horizontal = settingsRowInset, vertical = 11.dp))
+        Text(text, color = AloNativeAppMuted, fontSize = 15.sp, modifier = Modifier.padding(horizontal = settingsRowInset, vertical = 15.dp))
         SettingsDivider()
     }
 }
@@ -311,24 +368,19 @@ internal fun SettingsToggleRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
-                .heightIn(min = if (icon == null) 62.dp else 68.dp)
+                .heightIn(min = 52.dp)
                 .padding(horizontal = settingsRowInset, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(9.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (icon != null) {
-                Box(Modifier.size(30.dp).clip(AloSquircle(8.dp)).background(iconTint), contentAlignment = Alignment.Center) {
-                    Icon(icon, null, tint = Color.White, modifier = Modifier.size(17.dp))
-                }
+            if (icon != null) SettingsIconTile(icon, iconTint)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, color = AloNativeAppText, fontSize = 17.sp)
+                if (subtitle.isNotEmpty()) Text(subtitle, color = AloNativeAppMuted, fontSize = 14.sp, lineHeight = 18.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Text(title, color = AloNativeAppText, fontSize = 16.sp)
-                if (subtitle.isNotEmpty()) Text(subtitle, color = AloNativeAppMuted, fontSize = 13.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            }
-            Spacer(Modifier.width(3.dp))
             AloSwitch(checked = checked, onCheckedChange = null)
         }
-        SettingsDivider()
+        SettingsDivider(if (icon != null) settingsTileDividerStart else settingsRowInset)
     }
 }
 
@@ -349,14 +401,14 @@ internal fun SettingsMenuRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { expanded = true }
-                    .heightIn(min = if (compact) 56.dp else 64.dp)
+                    .heightIn(min = 52.dp)
                     .padding(horizontal = settingsRowInset, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(title, color = AloNativeAppText, fontSize = if (compact) 16.sp else 17.sp)
-                    if (subtitle.isNotEmpty()) Text(subtitle, color = AloNativeAppMuted, fontSize = 13.sp, maxLines = 2)
+                    Text(title, color = AloNativeAppText, fontSize = 17.sp)
+                    if (subtitle.isNotEmpty()) Text(subtitle, color = AloNativeAppMuted, fontSize = 14.sp, maxLines = 3)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(3.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -409,7 +461,7 @@ internal fun SettingsChoiceCard(
     SettingsMenuRow(title = title, options = options, selected = selected, onSelect = onSelect)
 }
 
-/** iOS's privacySelectionCard: a menu row on its own card. */
+/** The website's privacy choice: the group title, every option as a row with a check on the chosen one, a note under it. */
 @Composable
 internal fun ReferencePrivacyChoiceCard(
     title: String,
@@ -418,8 +470,27 @@ internal fun ReferencePrivacyChoiceCard(
     options: List<Pair<String, String>>,
     onSelect: (String) -> Unit
 ) {
-    SettingsSection(title = "") {
-        SettingsMenuRow(title = title, subtitle = subtitle, options = options, selected = selected, compact = false, onSelect = onSelect)
+    SettingsSection(title = title, note = subtitle) {
+        options.forEach { (value, label) -> SettingsCheckRow(label, checked = value == selected) { onSelect(value) } }
+    }
+}
+
+/** The website's .cell.choice: a title and an accent check when chosen. */
+@Composable
+internal fun SettingsCheckRow(title: String, checked: Boolean, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .toggleable(value = checked, role = Role.RadioButton, onValueChange = { onClick() })
+                .heightIn(min = 52.dp)
+                .padding(horizontal = settingsRowInset),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, color = AloNativeAppText, fontSize = 17.sp, modifier = Modifier.weight(1f))
+            if (checked) Icon(Icons.Rounded.Check, null, tint = AloNativeAppAccent, modifier = Modifier.size(20.dp))
+        }
+        SettingsDivider()
     }
 }
 
@@ -442,18 +513,9 @@ internal fun ReferencePrivacyActionCard(
     title: String,
     onClick: () -> Unit
 ) {
+    // The website's «Чёрный список»: a plain row on a card of its own.
     SettingsSection(title = "") {
-        Row(
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).heightIn(min = 62.dp).padding(horizontal = settingsRowInset),
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(Modifier.width(30.dp), contentAlignment = Alignment.Center) {
-                Icon(icon, null, tint = AloNativeAppText, modifier = Modifier.size(25.dp))
-            }
-            Text(title, modifier = Modifier.weight(1f), color = AloNativeAppText, fontSize = 18.sp)
-            SettingsChevron(22)
-        }
+        SettingsCell(title = title, onClick = onClick)
     }
 }
 

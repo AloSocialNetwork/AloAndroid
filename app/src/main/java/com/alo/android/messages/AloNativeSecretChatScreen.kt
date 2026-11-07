@@ -1,5 +1,16 @@
 package com.alo.android
 
+import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.automirrored.rounded.Send
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.zIndex
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -128,6 +139,9 @@ internal fun AloNativeSecretChatScreen(
         AloChatAppearanceStore(context.getSharedPreferences("alo-android", Context.MODE_PRIVATE)).read(null)
     }
     var chatMenu by remember { mutableStateOf(false) }
+    // The composer's held mic and the camera overlay of a circle being recorded.
+    val circleControl = remember { AloCircleRecordingControl() }
+    var secretComposerHeightPx by remember { mutableStateOf(0) }
 
     CompositionLocalProvider(LocalAloNativeChatAppearance provides chatAppearance) {
     Box(Modifier.fillMaxSize()) {
@@ -279,23 +293,31 @@ internal fun AloNativeSecretChatScreen(
             }
 
             if (chat != null && chat.isActive && !gone) {
-                SecretComposer(
-                    state = state,
-                    text = input,
-                    onTextChange = { input = it },
-                    onSend = {
-                        onAction(AloNativeAppAction.SendSecretMessage(input))
-                        input = ""
-                    },
-                    onAction = onAction
-                )
+                Box(Modifier.onSizeChanged { secretComposerHeightPx = it.height }) {
+                    SecretComposer(
+                        state = state,
+                        text = input,
+                        onTextChange = { input = it },
+                        onSend = {
+                            onAction(AloNativeAppAction.SendSecretMessage(input))
+                            input = ""
+                        },
+                        onAction = onAction,
+                        circleControl = circleControl
+                    )
+                }
             }
         }
-        // The camera of a circle being recorded (the same overlay as an ordinary chat): it reports the square clip.
+        // The camera of a circle being recorded (the same overlay as an ordinary chat), driven by the composer's held
+        // mic as in Telegram: release sends, the locked pause keeps it as a draft, sliding left cancels.
         if (state.secretCaptureState == AloChatCaptureState.Recording && state.secretRecorderMode == AloChatRecordMode.VideoCircle) {
             VideoCircleRecorderOverlay(
+                bottomInset = with(LocalDensity.current) { secretComposerHeightPx.toDp() },
                 onCancel = { onAction(AloNativeAppAction.StopSecretRecording(cancel = true)) },
-                onRecorded = { uri, seconds -> onAction(AloNativeAppAction.CompleteSecretCircleRecording(uri, seconds)) }
+                onRecorded = { uri, seconds -> onAction(AloNativeAppAction.CompleteSecretCircleRecording(uri, seconds, send = false)) },
+                onRecordedSend = { uri, seconds -> onAction(AloNativeAppAction.CompleteSecretCircleRecording(uri, seconds, send = true)) },
+                control = circleControl,
+                veilStopsAtComposer = true
             )
         }
     }
@@ -596,11 +618,63 @@ private fun SecretComposer(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
-    onAction: (AloNativeAppAction) -> Unit
+    onAction: (AloNativeAppAction) -> Unit,
+    circleControl: AloCircleRecordingControl
 ) {
     val canSend = (text.isNotBlank() || state.secretDraftAttachments.isNotEmpty()) && !state.isSendingSecret
-    val recordingVoice = state.secretCaptureState == AloChatCaptureState.Recording &&
-        state.secretRecorderMode == AloChatRecordMode.Voice
+    val isRecording = state.secretCaptureState == AloChatCaptureState.Recording
+    val circleRecording = isRecording && state.secretRecorderMode == AloChatRecordMode.VideoCircle
+    // Telegram's record button, as in an ordinary chat (AloRecordingGesture): a tap switches voice / circle, a hold
+    // records, sliding left cancels, sliding up locks, letting go sends; a locked recording pauses into a draft.
+    var mode by rememberSaveable { mutableStateOf(AloChatRecordMode.Voice) }
+    var drag by remember { mutableStateOf(AloRecordingDrag()) }
+    var held by remember { mutableStateOf(false) }
+    var locked by remember { mutableStateOf(false) }
+    var startedAtMs by remember { mutableStateOf(0L) }
+    LaunchedEffect(isRecording) {
+        if (isRecording) {
+            startedAtMs = System.currentTimeMillis()
+        } else {
+            held = false
+            locked = false
+            drag = AloRecordingDrag()
+        }
+    }
+    val stopRecording: (Boolean) -> Unit = { cancel ->
+        if (circleRecording) {
+            circleControl.send(if (cancel) AloCircleCommand.Cancel else AloCircleCommand.Preview)
+        } else {
+            onAction(AloNativeAppAction.StopSecretRecording(cancel = cancel))
+        }
+    }
+    val sendRecording: () -> Unit = {
+        if (circleRecording) circleControl.send(AloCircleCommand.Send)
+        else onAction(AloNativeAppAction.StopSecretRecording(cancel = false, send = true))
+    }
+    val haptics = LocalHapticFeedback.current
+    val screenWidthDp = LocalConfiguration.current.screenWidthDp.toFloat()
+    val heldMic = rememberUpdatedState(
+        AloHeldMicController(
+            isRecording = isRecording,
+            isLocked = locked,
+            isVoice = mode == AloChatRecordMode.Voice,
+            onTap = {
+                mode = if (mode == AloChatRecordMode.Voice) AloChatRecordMode.VideoCircle else AloChatRecordMode.Voice
+            },
+            onStart = { onAction(AloNativeAppAction.StartSecretRecording(mode)) },
+            onCancel = { stopRecording(true) },
+            onSend = sendRecording,
+            onStopToPreview = { stopRecording(false) },
+            onDrag = { drag = it },
+            onHeld = {
+                held = it
+                circleControl.isHeld = it
+            },
+            onLock = { locked = true },
+            haptic = { haptics.performHapticFeedback(HapticFeedbackType.LongPress) },
+            cancelDistance = AloRecordingDrag.cancelDistanceFor(screenWidthDp)
+        )
+    )
     // Over the chat wallpaper, as the ordinary composer: no bar of its own, the field is a glass oval.
     Column(Modifier.fillMaxWidth()) {
         if (state.secretDraftAttachments.isNotEmpty()) {
@@ -626,76 +700,51 @@ private fun SecretComposer(
                 }
             }
         }
-        if (recordingVoice) {
-            // A voice message being recorded: bin, red dot and time, the live levels, and the round send button.
-            Row(
-                Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                IconButton(onClick = { onAction(AloNativeAppAction.StopSecretRecording(cancel = true)) }) {
-                    Icon(Icons.Rounded.Delete, "Отменить запись", tint = Color(0xFFFF453A))
-                }
-                Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFFFF453A)))
-                Spacer(Modifier.size(8.dp))
-                val liveInput = LocalAloLiveInput.current
-                Text(
-                    "%d:%02d".format(liveInput.secretRecordingSeconds / 60, liveInput.secretRecordingSeconds % 60),
-                    color = AloNativeAppText, fontSize = 15.sp,
-                    modifier = Modifier.testTag("alo.secret.recording.time")
-                )
-                Spacer(Modifier.size(10.dp))
-                SecretRecordingLevels(liveInput.secretRecordingLevels, Modifier.weight(1f).height(26.dp))
-                Spacer(Modifier.size(6.dp))
-                Box(
-                    Modifier
-                        .size(42.dp)
-                        .clip(CircleShape)
-                        .background(AloSecretGreen)
-                        .clickable { onAction(AloNativeAppAction.StopSecretRecording(cancel = false, send = true)) }
-                        .testTag("alo.secret.recording.send"),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(Icons.Rounded.ArrowUpward, "Отправить голосовое", tint = Color.White, modifier = Modifier.size(22.dp))
-                }
-            }
-        } else Row(
+        Row(
             Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = { onAction(AloNativeAppAction.PickSecretAttachment) }, enabled = !state.isSendingSecret) {
-                Icon(Icons.Rounded.AttachFile, "Прикрепить", tint = AloNativeAppMuted)
+            if (!isRecording) {
+                IconButton(onClick = { onAction(AloNativeAppAction.PickSecretAttachment) }, enabled = !state.isSendingSecret) {
+                    Icon(Icons.Rounded.AttachFile, "Прикрепить", tint = AloNativeAppMuted)
+                }
             }
-            AloNativeGlassPanel(modifier = Modifier.weight(1f), shape = RoundedCornerShape(22.dp)) {
-            TextField(
-                value = text,
-                onValueChange = onTextChange,
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Секретное сообщение", color = AloNativeAppMuted) },
-                maxLines = 5,
-                keyboardOptions = KeyboardOptions.Default,
-                shape = RoundedCornerShape(22.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = Color.Transparent,
-                    unfocusedContainerColor = Color.Transparent,
-                    focusedTextColor = AloNativeAppText,
-                    unfocusedTextColor = AloNativeAppText,
-                    cursorColor = AloSecretGreen,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent
+            if (isRecording) {
+                // Telegram's record panel in place of the field: red dot, «0:03,45», «‹ Влево — отмена» / «ОТМЕНА».
+                AloNativeGlassPanel(modifier = Modifier.weight(1f).height(48.dp), shape = RoundedCornerShape(22.dp)) {
+                    AloVoiceRecordingPanel(
+                        startedAtMs = startedAtMs,
+                        isLocked = locked,
+                        drag = drag,
+                        onCancel = { stopRecording(true) },
+                        modifier = Modifier.padding(start = 14.dp, end = 10.dp)
+                    )
+                }
+            } else {
+                AloNativeGlassPanel(modifier = Modifier.weight(1f), shape = RoundedCornerShape(22.dp)) {
+                TextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Секретное сообщение", color = AloNativeAppMuted) },
+                    maxLines = 5,
+                    keyboardOptions = KeyboardOptions.Default,
+                    shape = RoundedCornerShape(22.dp),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedTextColor = AloNativeAppText,
+                        unfocusedTextColor = AloNativeAppText,
+                        cursorColor = AloSecretGreen,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    )
                 )
-            )
+                }
             }
             Spacer(Modifier.size(6.dp))
-            if (!canSend && !state.isSendingSecret) {
-                // Nothing typed: the camera (a circle) and the microphone (a voice message), as on the website.
-                SecretRecordButton(Icons.Rounded.Videocam, "Записать видеосообщение", "alo.secret.record.circle") {
-                    onAction(AloNativeAppAction.StartSecretRecording(AloChatRecordMode.VideoCircle))
-                }
-                Spacer(Modifier.size(4.dp))
-                SecretRecordButton(Icons.Rounded.Mic, "Записать голосовое сообщение", "alo.secret.record.voice") {
-                    onAction(AloNativeAppAction.StartSecretRecording(AloChatRecordMode.Voice))
-                }
-            } else Box(
+            if (canSend || state.isSendingSecret) {
+                Box(
                 Modifier
                     .size(42.dp)
                     .clip(CircleShape)
@@ -710,41 +759,66 @@ private fun SecretComposer(
                     Icon(Icons.Rounded.ArrowUpward, "Отправить", tint = Color.White, modifier = Modifier.size(22.dp))
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun SecretRecordButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    tag: String,
-    onClick: () -> Unit
-) {
-    Box(
-        Modifier
-            .size(42.dp)
-            .clip(CircleShape)
-            .background(AloNativeAppBackgroundSecondary)
-            .clickable(onClick = onClick)
-            .testTag(tag),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(icon, label, tint = AloNativeAppText, modifier = Modifier.size(22.dp))
-    }
-}
-
-/** The loudness of the last moments of the recording, newest on the right. */
-@Composable
-private fun SecretRecordingLevels(levels: List<Float>, modifier: Modifier = Modifier) {
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
-        levels.takeLast(28).forEach { level ->
-            Box(
-                Modifier
-                    .size(width = 3.dp, height = (26f * level.coerceIn(0.12f, 1f)).dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(AloSecretGreen)
-            )
+            } else {
+                Box(Modifier.size(42.dp), contentAlignment = Alignment.Center) {
+                    if (isRecording && held && !locked) {
+                        val lockHeight = 50f - 14f * drag.lockProgress
+                        AloRecordingLock(
+                            progress = drag.lockProgress,
+                            onLock = { locked = true },
+                            modifier = Modifier.offset(y = (-112f + lockHeight / 2f + drag.orbY).dp).zIndex(2f)
+                        )
+                    }
+                    if (isRecording && locked) {
+                        AloRecordingPauseButton(
+                            onClick = { stopRecording(false) },
+                            modifier = Modifier.offset(y = (-78).dp).zIndex(2f)
+                        )
+                    }
+                    if (isRecording && (held || locked)) {
+                        AloRecordingOrb(
+                            icon = when {
+                                locked -> Icons.AutoMirrored.Rounded.Send
+                                circleRecording -> Icons.Rounded.Videocam
+                                else -> Icons.Rounded.Mic
+                            },
+                            color = AloSecretGreen,
+                            level = LocalAloLiveInput.current.secretRecordingLevels.lastOrNull() ?: 0f,
+                            scale = if (locked) 1f else drag.orbScale,
+                            contentDescription = if (locked) "Отправить запись" else null,
+                            modifier = Modifier
+                                .offset(y = if (locked) 0.dp else drag.orbY.dp)
+                                .zIndex(3f)
+                                .then(if (locked) Modifier.clip(CircleShape).clickable(onClick = sendRecording) else Modifier)
+                        )
+                    }
+                    // The mic itself hides under the orb but keeps the holding finger's gesture.
+                    Box(
+                        Modifier
+                            .size(42.dp)
+                            .graphicsLayer { alpha = if (isRecording && (held || locked)) 0f else 1f }
+                            .clip(CircleShape)
+                            .background(AloNativeAppBackgroundSecondary)
+                            .aloHeldMic(heldMic)
+                            .semantics {
+                                contentDescription = if (mode == AloChatRecordMode.Voice) {
+                                    "Записать голосовое сообщение. Нажмите, чтобы перейти к кружку"
+                                } else {
+                                    "Записать видеосообщение. Нажмите, чтобы перейти к голосовому"
+                                }
+                            }
+                            .testTag("alo.secret.record"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            if (mode == AloChatRecordMode.Voice) Icons.Rounded.Mic else Icons.Rounded.Videocam,
+                            null,
+                            tint = AloNativeAppText,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 }

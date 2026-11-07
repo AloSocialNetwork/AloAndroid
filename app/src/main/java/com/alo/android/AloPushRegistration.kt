@@ -86,14 +86,32 @@ object AloPushRegistration {
         val safeToken = token?.trim().orEmpty().ifBlank { storedToken(context) }
         if (safeToken.isBlank()) return
         scope.launch {
+            val client = apiClient ?: backgroundClient(context)
             runCatching {
-                (apiClient ?: backgroundClient(context)).registerPushToken(
+                client.registerPushToken(
                     token = safeToken,
                     deviceId = deviceId(context),
                     appVersion = BuildConfig.VERSION_NAME,
                     soundsEnabled = soundsEnabled(context),
                     previewsEnabled = previewsEnabled(context)
                 )
+            }
+            // The other accounts saved on this phone get their pushes too, as in Telegram (each with its own session).
+            val store = AloSecureAccountStore(context.applicationContext)
+            val active = store.activeAccountId()
+            for (account in store.accounts()) {
+                if (account.userId == active) continue
+                val cookie = store.sessionFor(account.userId) ?: continue
+                runCatching {
+                    client.registerPushTokenAs(
+                        cookieHeader = cookie,
+                        token = safeToken,
+                        deviceId = deviceId(context),
+                        appVersion = BuildConfig.VERSION_NAME,
+                        soundsEnabled = soundsEnabled(context),
+                        previewsEnabled = previewsEnabled(context)
+                    )
+                }
             }
         }
     }

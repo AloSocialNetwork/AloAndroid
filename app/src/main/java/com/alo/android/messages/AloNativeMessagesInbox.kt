@@ -144,7 +144,8 @@ private fun ConversationRow(
                     avatarUrl = conversation.peer.avatarUrl,
                     verified = conversation.peer.verified,
                     size = 52.dp,
-                    colorSeed = conversation.peer.id.toString()
+                    colorSeed = conversation.peer.id.toString(),
+                    modifier = Modifier.aloPremiumFrame(if (conversation.roomId == 0 && conversation.peer.entityType !in setOf("channel", "saved")) conversation.peer.id else 0, 52.dp)
                 )
             }
 
@@ -159,13 +160,16 @@ private fun ConversationRow(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(
+                        // Alo Премиум: the name in its colour, then the star or the emoji status (direct chats only).
+                        val premiumId = if (conversation.roomId == 0 && conversation.peer.entityType !in setOf("channel", "saved")) conversation.peer.id else 0
+                        AloPremiumName(
                             text = conversation.peer.name,
-                            style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold),
-                            color = AloNativeAppText,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            userId = premiumId,
+                            fontSize = MaterialTheme.typography.bodyLarge.fontSize,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
+                        AloPremiumMark(premiumId, 14.dp)
                         if (conversation.peer.online) {
                             Box(
                                 modifier = Modifier

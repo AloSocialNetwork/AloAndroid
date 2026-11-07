@@ -43,8 +43,8 @@ android {
         minSdk = 24
         targetSdk = 36
         // Raise both for every release (scripts/android-release.sh). The properties are for testing an update on the stand.
-        versionCode = providers.gradleProperty("aloVersionCode").orNull?.toInt() ?: 8
-        versionName = providers.gradleProperty("aloVersionName").orNull ?: "0.1.7"
+        versionCode = providers.gradleProperty("aloVersionCode").orNull?.toInt() ?: 16
+        versionName = providers.gradleProperty("aloVersionName").orNull ?: "0.1.15"
 
         ndk {
             // 64-bit ARM only: phones and the Apple Silicon AVD. 32-bit (armeabi-v7a) was shipped in 0.1.7 and dropped

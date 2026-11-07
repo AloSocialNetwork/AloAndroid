@@ -9,6 +9,8 @@ internal sealed interface AloDeepLinkTarget {
     data class Invite(val token: String) : AloDeepLinkTarget
     data class Community(val username: String) : AloDeepLinkTarget
     data class Post(val postId: Int) : AloDeepLinkTarget
+    /** A public post link https://ало.online/p/<random code>; the post is looked up by its code. */
+    data class PostCode(val code: String) : AloDeepLinkTarget
     data class User(val userId: Int) : AloDeepLinkTarget
     data class Channel(val channelId: Int) : AloDeepLinkTarget
     data class ForumTopic(val roomId: Int, val topicId: Int) : AloDeepLinkTarget
@@ -23,6 +25,14 @@ internal sealed interface AloDeepLinkTarget {
         private val communityPattern = Regex("^[a-z0-9_]{5,32}$")
         private val invitePattern = Regex("^[A-Za-z0-9_-]{16,128}$")
         private val storyCodePattern = Regex("^[A-Za-z0-9_-]{8,32}$")
+        // 12 letters, digits, "-" or "_", never digits only (the server's post-share-code.js).
+        private val postCodePattern = Regex("^(?![0-9]+$)[A-Za-z0-9_-]{12}$")
+
+        fun isPostCode(value: String): Boolean = postCodePattern.matches(value)
+
+        /** The link to share: by the post's random code, so nobody can walk through posts by number. */
+        fun postUrl(post: AloPost): String =
+            buildAloLink("p", post.shareCode.takeIf(::isPostCode) ?: post.id.toString())
 
         fun parse(uri: Uri?): AloDeepLinkTarget? = parse(uri?.toString())
 
@@ -80,6 +90,7 @@ internal sealed interface AloDeepLinkTarget {
                 "invite", "join", "+" -> value.takeIf(invitePattern::matches)?.let(::Invite)
                 "c", "channel", "community" -> normalizedCommunity(value)?.let(::Community)
                 "p", "post", "posts" -> positiveId(value)?.let(::Post)
+                    ?: value.takeIf(::isPostCode)?.let(::PostCode)
                 "u", "user", "users" -> positiveId(value)?.let(::User)
                 "ch", "feed-channel" -> positiveId(value)?.let(::Channel)
                 "r", "resolve" -> normalizedHandle(value)?.let(::Handle)

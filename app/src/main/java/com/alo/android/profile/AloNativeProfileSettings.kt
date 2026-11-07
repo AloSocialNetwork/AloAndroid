@@ -37,6 +37,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.graphics.Brush
+import android.net.Uri
+import android.content.Intent
+import androidx.compose.material.icons.outlined.Code
+import androidx.compose.material.icons.outlined.Mail
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material.icons.rounded.Add
@@ -52,6 +59,8 @@ import androidx.compose.foundation.background
 import androidx.compose.material.icons.automirrored.rounded.Logout
 import androidx.compose.material.icons.rounded.PhonelinkErase
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.AutoAwesome
+import androidx.compose.material.icons.outlined.Brush
 import androidx.compose.material.icons.outlined.FileDownload
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.QrCodeScanner
@@ -149,7 +158,9 @@ private enum class AloSettingsPage {
     Accounts,
     Passkeys,
     ExportData,
-    DeleteAccount
+    DeleteAccount,
+    Premium,
+    PremiumLook
 }
 
 @Composable
@@ -169,6 +180,8 @@ internal fun ProfileSettingsSheet(
     isSecurityLoading: Boolean,
     securityNotice: String,
     savedAccounts: List<AloStoredAccount>,
+    /** Unread messages of the other accounts on this phone, by user id (shown beside them, as in Telegram). */
+    accountUnread: Map<Int, Int> = emptyMap(),
     isAccountSecurityLoading: Boolean,
     passkeys: List<AloPasskey>,
     isPasskeyLoading: Boolean,
@@ -284,6 +297,8 @@ internal fun ProfileSettingsSheet(
         label = "settingsEntrance"
     )
     val activePage = runCatching { AloSettingsPage.valueOf(page) }.getOrDefault(AloSettingsPage.Root)
+    val premiumContext = androidx.compose.ui.platform.LocalContext.current
+    val premiumApi = remember { AloApiClient(baseUrl = AloServerConfiguration.apiBaseUrl, applicationContext = premiumContext.applicationContext) }
     val hasPendingPrivacyChanges = currentPrivacy != privacySettings
     val hasPendingNotificationChanges = currentNotifications != notificationSettings
     val hasPendingSettingsChanges = when (activePage) {
@@ -549,6 +564,8 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Passkeys -> "Ключи доступа"
                         AloSettingsPage.ExportData -> "Экспорт данных"
                         AloSettingsPage.DeleteAccount -> "Удалить аккаунт"
+                        AloSettingsPage.Premium -> "Alo Премиум"
+                        AloSettingsPage.PremiumLook -> "Премиум-оформление"
                     }
                 ) {
                     if (activePage == AloSettingsPage.Privacy || activePage == AloSettingsPage.Notifications) {
@@ -575,38 +592,106 @@ internal fun ProfileSettingsSheet(
                 ) {
                     when (it) {
                         AloSettingsPage.Root -> {
+                            val context = LocalContext.current
+                            val openSitePage: (String) -> Unit = { path ->
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(AloServerConfiguration.apiUrl(path))))
+                                }
+                            }
+                            // The website's settings (web/js/views/settings.js rootPage): the profile card, the accounts,
+                            // then groups with a colour tile, a title and a grey subtitle on every row.
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(0.dp)
                             ) {
                                 item {
-                                    SettingsSection(title = "") {
-                                        if (onEditProfile != null) {
+                                    SettingsProfileCard(me = me, onClick = onEditProfile)
+                                    Spacer(Modifier.height(16.dp))
+                                }
+                                // Telegram's Settings: the other accounts of this phone, then «Добавить аккаунт».
+                                item {
+                                    val others = savedAccounts.filter { it.userId != me.id }
+                                    if (others.isNotEmpty() || AloAccountSwitcher.canAdd(savedAccounts, me.id)) {
+                                        SettingsSection(title = "") {
+                                            others.forEach { account ->
+                                                AloAccountRow(
+                                                    name = account.displayName,
+                                                    subtitle = account.username.takeIf(String::isNotBlank)?.let { "@$it" } ?: "Сохранённый вход",
+                                                    avatarUrl = account.avatarUrl,
+                                                    userId = account.userId,
+                                                    unread = accountUnread[account.userId] ?: 0,
+                                                    current = false,
+                                                    onClick = if (isAccountSecurityLoading) null else ({ onSwitchSecurityAccount(account.userId) })
+                                                )
+                                            }
+                                            if (AloAccountSwitcher.canAdd(savedAccounts, me.id)) AloAddAccountRow(onAddAccount)
+                                        }
+                                    }
+                                }
+                                // Alo Премиум, only once the server switches it on (`premiumEnabled`).
+                                if (AloPremiumDirectory.enabled) {
+                                    item {
+                                        Spacer(Modifier.height(16.dp))
+                                        SettingsSection(title = "") {
                                             RootSettingsRow(
-                                                icon = Icons.Outlined.Edit,
-                                                title = "Редактировать профиль",
-                                                onClick = onEditProfile
+                                                icon = Icons.Outlined.AutoAwesome,
+                                                iconBrush = Brush.linearGradient(listOf(Color(0xFFFFB84D), Color(0xFFFF6FB5), Color(0xFF8F7BFF))),
+                                                title = "Alo Премиум",
+                                                subtitle = "Значок, цвет имени, статус и другое",
+                                                onClick = { page = AloSettingsPage.Premium.name }
+                                            )
+                                            RootSettingsRow(
+                                                icon = Icons.Outlined.Brush,
+                                                iconTint = Color(0xFFFF6FB5),
+                                                title = "Премиум-оформление",
+                                                subtitle = "Статус, цвет имени, рамка, GIF и музыка",
+                                                onClick = { page = AloSettingsPage.PremiumLook.name }
                                             )
                                         }
+                                    }
+                                }
+                                item {
+                                    Spacer(Modifier.height(24.dp))
+                                    SettingsSection(title = "Аккаунт") {
                                         RootSettingsRow(
                                             icon = Icons.Outlined.Shield,
+                                            iconTint = Color(0xFFFF9F0A),
                                             title = "Безопасность",
+                                            subtitle = "Пароль, устройства и защита аккаунта",
                                             onClick = { page = AloSettingsPage.Security.name }
                                         )
                                         RootSettingsRow(
                                             icon = Icons.Outlined.PanTool,
+                                            iconTint = Color(0xFF34C759),
                                             title = "Приватность",
+                                            subtitle = "Кто может писать, звонить и видеть активность",
                                             onClick = { page = AloSettingsPage.Privacy.name }
                                         )
                                         RootSettingsRow(
                                             icon = Icons.Outlined.Notifications,
+                                            iconTint = Color(0xFFFF3B30),
                                             title = "Уведомления",
+                                            subtitle = "Какие события приходят в Alo",
                                             onClick = { page = AloSettingsPage.Notifications.name }
                                         )
                                         RootSettingsRow(
+                                            icon = Icons.Outlined.Storage,
+                                            iconTint = Color(0xFF177DFF),
+                                            title = "Данные и память",
+                                            subtitle = "Кэш и хранилище на этом телефоне",
+                                            onClick = { page = AloSettingsPage.DataStorage.name }
+                                        )
+                                    }
+                                }
+                                item {
+                                    Spacer(Modifier.height(24.dp))
+                                    SettingsSection(title = "Чаты") {
+                                        RootSettingsRow(
                                             icon = Icons.Outlined.Palette,
+                                            iconTint = Color(0xFFAF52DE),
                                             title = "Оформление",
+                                            subtitle = "Тема, цвета и фон чатов",
                                             detail = when (themeMode) {
                                                 AloThemeMode.Light -> "Светлая"
                                                 AloThemeMode.System -> "Система"
@@ -616,46 +701,70 @@ internal fun ProfileSettingsSheet(
                                         )
                                         RootSettingsRow(
                                             icon = Icons.Outlined.EmojiEmotions,
+                                            iconTint = Color(0xFFFF9500),
                                             title = "Любимая реакция",
+                                            subtitle = "Ставится двойным нажатием на сообщение",
                                             value = me.favoriteReaction,
                                             onClick = { favoriteReactionOpen = true }
                                         )
-                                        RootSettingsRow(
-                                            icon = Icons.Outlined.Storage,
-                                            title = "Данные и память",
-                                            onClick = { page = AloSettingsPage.DataStorage.name }
-                                        )
+                                    }
+                                }
+                                item {
+                                    Spacer(Modifier.height(24.dp))
+                                    SettingsSection(title = "Для автора и бизнеса") {
                                         RootSettingsRow(
                                             icon = Icons.Outlined.BusinessCenter,
+                                            iconTint = Color(0xFF1FB575),
                                             title = "Бизнес-профиль",
+                                            subtitle = "Часы работы, приветствие и быстрые ответы",
                                             onClick = { page = AloSettingsPage.Business.name }
                                         )
                                         if (onOpenCreatorStats != null) {
                                             RootSettingsRow(
                                                 icon = Icons.Outlined.BarChart,
+                                                iconTint = Color(0xFF177DFF),
                                                 title = "Панель автора",
+                                                subtitle = "Просмотры, реакции и подписчики",
                                                 onClick = onOpenCreatorStats
                                             )
                                         }
                                         if (onOpenModeration != null) {
                                             RootSettingsRow(
                                                 icon = Icons.Outlined.VerifiedUser,
+                                                iconTint = Color(0xFFFF4D5F),
                                                 title = "Модерация",
+                                                subtitle = "Жалобы, апелляции, команда",
                                                 onClick = onOpenModeration
                                             )
                                         }
                                     }
                                 }
                                 item {
+                                    Spacer(Modifier.height(24.dp))
+                                    SettingsSection(title = "Alo") {
+                                        val grey = Color(0xFF8E8E93)
+                                        RootSettingsRow(icon = Icons.Outlined.Description, iconTint = grey, title = "Условия", onClick = { openSitePage("/legal/terms.html") })
+                                        RootSettingsRow(icon = Icons.Outlined.Lock, iconTint = grey, title = "Конфиденциальность", onClick = { openSitePage("/legal/privacy.html") })
+                                        RootSettingsRow(icon = Icons.Outlined.Mail, iconTint = grey, title = "Контакты и поддержка", onClick = { openSitePage("/legal/contacts.html") })
+                                        RootSettingsRow(icon = Icons.Outlined.Code, iconTint = grey, title = "Исходный код и лицензии", subtitle = "Код приложений на GitHub, libsignal и код сайта", onClick = { openSitePage("/legal/open-source.html") })
+                                    }
+                                }
+                                item {
+                                    Spacer(Modifier.height(24.dp))
+                                    SettingsSection(title = "") {
+                                        SettingsCell(title = "Выйти из аккаунта", titleColor = Color(0xFFFF4D5F), centered = true, onClick = onLogout)
+                                    }
+                                }
+                                item {
                                     val updater = LocalAloAppUpdater.current
+                                    // The website's version line; a tap looks for an update.
                                     Text(
-                                        text = "Версия ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                                        text = "Alo для Android · версия ${BuildConfig.VERSION_NAME}",
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .clickable { updater?.checkNow() }
-                                            .padding(top = 22.dp),
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Medium,
+                                            .padding(top = 12.dp, bottom = 4.dp),
+                                        fontSize = 13.sp,
                                         textAlign = TextAlign.Center,
                                         color = AloNativeAppMuted
                                     )
@@ -668,7 +777,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Notifications -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -808,7 +917,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Privacy -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 item {
@@ -879,22 +988,25 @@ internal fun ProfileSettingsSheet(
                                                 updatePrivacy { value -> value.copy(allowMessageForwards = it) }
                                             }
                                         )
-                                        SettingsChoiceCard(
-                                            title = "Кто может звонить",
-                                            options = listOf(
-                                                "friends" to "Друзья",
-                                                "friends_of_friends" to "Друзья и друзья друзей",
-                                                "all" to "Все, включая незнакомых",
-                                                "none" to "Никто"
-                                            ),
-                                            selected = currentPrivacy.callScope,
-                                            onSelect = {
-                                                updateExclusiveChoice(it, currentPrivacy.callScope) { chosen ->
-                                                    updatePrivacy { value -> value.copy(callScope = chosen) }
-                                                }
-                                            }
-                                        )
                                     }
+                                }
+                                item {
+                                    ReferencePrivacyChoiceCard(
+                                        title = "Звонки",
+                                        subtitle = "Кто может вам звонить",
+                                        options = listOf(
+                                            "friends" to "Друзья",
+                                            "friends_of_friends" to "Друзья и друзья друзей",
+                                            "all" to "Все, включая незнакомых",
+                                            "none" to "Никто"
+                                        ),
+                                        selected = currentPrivacy.callScope,
+                                        onSelect = {
+                                            updateExclusiveChoice(it, currentPrivacy.callScope) { chosen ->
+                                                updatePrivacy { value -> value.copy(callScope = chosen) }
+                                            }
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -902,16 +1014,13 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.BlockedUsers -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
                                     SettingsSection(title = "") {
                                         if (blockedUsers.isEmpty()) {
-                                            SettingsInfoRow(
-                                                title = "Нет заблокированных пользователей",
-                                                value = "Здесь появятся пользователи, которых вы заблокировали."
-                                            )
+                                            SettingsNoteRow("Здесь пока никого нет. Заблокировать человека можно в его профиле.")
                                         } else {
                                             blockedUsers.forEach { (userId, peer) ->
                                                 BlockedUserRow(
@@ -930,7 +1039,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Theme -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -962,12 +1071,23 @@ internal fun ProfileSettingsSheet(
                             }
                         }
 
+                        AloSettingsPage.Premium -> AloPremiumSettingsPage(
+                            api = premiumApi,
+                            onOpenLook = { page = AloSettingsPage.PremiumLook.name }
+                        )
+
+                        AloSettingsPage.PremiumLook -> AloPremiumLookPage(
+                            api = premiumApi,
+                            me = me,
+                            onOpenPremium = { page = AloSettingsPage.Premium.name }
+                        )
+
                         AloSettingsPage.Business -> {
                             // iOS's BusinessProfileSettingsContent: labelled fields on 20pt cards, one big Save.
                             val autoReplyMissing = autoReplyEnabled && autoReplyMessage.isBlank()
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(16.dp)
                             ) {
                                 item {
@@ -1162,7 +1282,7 @@ internal fun ProfileSettingsSheet(
                             // iOS's securityPage with AloAccountSecurityControls, card by card.
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(22.dp)
                             ) {
                                 item {
@@ -1378,7 +1498,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Accounts -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1450,7 +1570,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.Passkeys -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1530,7 +1650,7 @@ internal fun ProfileSettingsSheet(
                             val exportReady = exportPassword.isNotBlank() && !isAccountSecurityLoading
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1580,7 +1700,7 @@ internal fun ProfileSettingsSheet(
                                 !isAccountSecurityLoading
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1636,7 +1756,7 @@ internal fun ProfileSettingsSheet(
                         AloSettingsPage.PasswordChange -> {
                             LazyColumn(
                                 modifier = Modifier.fillMaxSize(),
-                                contentPadding = PaddingValues(start = 12.dp, end = 12.dp, top = 4.dp, bottom = 44.dp),
+                                contentPadding = PaddingValues(start = settingsPageGutter, end = settingsPageGutter, top = 8.dp, bottom = 44.dp),
                                 verticalArrangement = Arrangement.spacedBy(AloNativeLayout.spacingMedium)
                             ) {
                                 item {
@@ -1673,6 +1793,36 @@ internal fun ProfileSettingsSheet(
 }
 
 /** iOS's businessCard: 16pt insets, 13pt between rows, 20pt corners. */
+/** The website's .settings-me: a 64 avatar, the 20 name over the grey @username, a chevron to the profile editor. */
+@Composable
+private fun SettingsProfileCard(me: AloCurrentUser, onClick: (() -> Unit)?) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(AloSquircle(22.dp))
+            .background(AloNativeAppSurface)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        AvatarBadge(name = me.name, avatarUrl = me.avatarUrl, verified = me.verified, size = 64.dp, colorSeed = me.username.ifBlank { me.name })
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    me.name.ifBlank { "Профиль" },
+                    color = AloNativeAppText, fontSize = 20.sp, fontWeight = FontWeight.Bold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false)
+                )
+            }
+            if (me.username.isNotBlank()) {
+                Text("@${me.username}", color = AloNativeAppMuted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        if (onClick != null) SettingsChevron()
+    }
+}
+
 @Composable
 private fun BusinessCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
@@ -1938,27 +2088,30 @@ private fun BlockedUserRow(
     isUpdating: Boolean,
     onUnblock: () -> Unit
 ) {
-    val displayName = peer?.name?.ifBlank { null } ?: "Пользователь #$userId"
+    // The name comes from /api/users/blocks; «Пользователь» only while that list has not loaded yet.
+    val displayName = peer?.name?.ifBlank { null } ?: "Пользователь"
     Column(modifier = Modifier.fillMaxWidth()) {
+        // The website's blocked row: a 40 avatar, the name over the grey @username, «Разблокировать».
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(60.dp)
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .heightIn(min = 60.dp)
+                .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             AvatarBadge(
                 name = displayName,
                 avatarUrl = peer?.avatarUrl.orEmpty(),
                 verified = peer?.verified == true,
-                size = 36.dp,
+                size = 40.dp,
                 colorSeed = peer?.username?.ifBlank { displayName } ?: displayName
             )
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = displayName,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.SemiBold,
                     color = AloNativeAppText,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1967,7 +2120,7 @@ private fun BlockedUserRow(
                 if (username != null) {
                     Text(
                         text = "@$username",
-                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 14.sp,
                         color = AloNativeAppMuted,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -1977,17 +2130,16 @@ private fun BlockedUserRow(
             Text(
                 text = if (isUpdating) "…" else "Разблокировать",
                 modifier = Modifier
-                    .clip(AloSquircle(10.dp))
+                    .clip(RoundedCornerShape(percent = 50))
+                    .background(AloNativeAppAccent.copy(alpha = 0.14f))
                     .clickable(enabled = !isUpdating, onClick = onUnblock)
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
+                    .padding(horizontal = 12.dp, vertical = 7.dp),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = if (isUpdating) AloNativeAppMuted else AloNativeAppAccent
             )
         }
-        HorizontalDivider(
-            modifier = Modifier.padding(start = 12.dp),
-            color = AloNativeAppSeparator
-        )
+        SettingsDivider(70.dp)
     }
 }
 

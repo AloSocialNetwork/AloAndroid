@@ -15,6 +15,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
+import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -31,93 +32,130 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.runtime.State
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.pointer.util.VelocityTracker
 import androidx.compose.ui.unit.dp
-import kotlin.math.abs
 
 /**
- * A held mic, as Telegram (TGModernConversationInputMicButton) and the iOS app (AloRecordingDrag)
- * read it: sliding left 150dp cancels, sliding up 110dp locks the recording so the finger can let
- * go, and releasing sends. Distances are in dp, velocities in dp per second.
+ * A held mic, as Telegram Android reads it (ChatActivityEnterView): sliding left by 35 % of the
+ * screen width, at most 140dp, cancels; sliding up 57dp locks the recording so the finger can let
+ * go (only while it has slid less than 30 % towards cancel); letting go sends. Distances in dp.
  */
-internal data class AloRecordingDrag(val dx: Float = 0f, val dy: Float = 0f) {
-    val cancelProgress: Float get() = (-dx / CANCEL_DISTANCE).coerceIn(0f, 1f)
+internal data class AloRecordingDrag(
+    val dx: Float = 0f,
+    val dy: Float = 0f,
+    val cancelDistance: Float = MAX_CANCEL_DISTANCE
+) {
+    val cancelProgress: Float get() = (-dx / cancelDistance).coerceIn(0f, 1f)
     val lockProgress: Float get() = (-dy / LOCK_DISTANCE).coerceIn(0f, 1f)
-    val shouldLock: Boolean get() = -dy > LOCK_DISTANCE && -dy > abs(dx) * 1.2f
-    val shouldCancel: Boolean get() = -dx > CANCEL_DISTANCE && !shouldLock
+    val shouldLock: Boolean get() = -dy >= LOCK_DISTANCE && cancelProgress < 0.3f
+    val shouldCancel: Boolean get() = cancelProgress >= 1f && !shouldLock
 
-    /** The orb under the finger, kept within the cancel and lock reach. */
-    val orbX: Float get() = dx.coerceIn(-CANCEL_DISTANCE, 0f)
+    /** The circle rises with the finger up to the lock; sideways it stays and shrinks. */
     val orbY: Float get() = dy.coerceIn(-LOCK_DISTANCE, 0f)
+
+    /** Telegram's circle: 0.7 + 0.3 × (1 − cancel progress). */
+    val orbScale: Float get() = 0.7f + 0.3f * (1f - cancelProgress)
 
     enum class Release { Finish, Cancel, Lock }
 
-    /** What letting go means: the dominant direction first, then a deliberate flick. */
-    fun release(velocityX: Float, velocityY: Float): Release {
-        val horizontal = abs(dx) > abs(dy)
-        if ((horizontal && dx < -100f) || velocityX < -400f) return Release.Cancel
-        if ((!horizontal && dy < -60f) || velocityY < -400f) return Release.Lock
-        return Release.Finish
+    /** Telegram Android sends on release; cancel and lock happen while the finger moves. */
+    fun release(): Release = when {
+        shouldLock -> Release.Lock
+        shouldCancel -> Release.Cancel
+        else -> Release.Finish
     }
 
     companion object {
-        const val CANCEL_DISTANCE = 150f
-        const val LOCK_DISTANCE = 110f
+        const val MAX_CANCEL_DISTANCE = 140f
+        const val LOCK_DISTANCE = 57f
         /** How long a press waits before it becomes a recording (the iOS app's 0.19 s). */
         const val HOLD_MS = 190L
+
+        fun cancelDistanceFor(screenWidthDp: Float): Float = minOf(MAX_CANCEL_DISTANCE, screenWidthDp * 0.35f)
     }
 }
 
-/** The big circle under a holding finger: it breathes with the voice and shrinks towards cancel. */
+/** Telegram Android's record circle: 41dp radius, two translucent waves (47–62dp) breathing with the voice. */
 @Composable
-internal fun AloRecordingOrb(icon: ImageVector, color: Color, level: Float, cancelProgress: Float, modifier: Modifier = Modifier) {
-    val swell by animateFloatAsState(1f + level.coerceIn(0f, 1f) * (50f / 110f), tween(120), label = "orbSwell")
+internal fun AloRecordingOrb(
+    icon: ImageVector,
+    color: Color,
+    level: Float,
+    scale: Float,
+    modifier: Modifier = Modifier,
+    contentDescription: String? = null
+) {
+    val voice by animateFloatAsState(level.coerceIn(0f, 1f), tween(120), label = "orbVoice")
     Box(
         modifier
-            .requiredSize(110.dp)
+            .requiredSize(124.dp)
             .graphicsLayer {
-                val scale = 1f - cancelProgress * 0.5f
                 scaleX = scale
                 scaleY = scale
-            },
+            }
+            .then(if (contentDescription != null) Modifier.semantics { this.contentDescription = contentDescription } else Modifier),
         contentAlignment = Alignment.Center
     ) {
         Box(
             Modifier
-                .requiredSize(110.dp)
-                .graphicsLayer { scaleX = swell; scaleY = swell }
+                .requiredSize((100f + 24f * voice).dp)
                 .clip(CircleShape)
-                .background(color.copy(alpha = 0.18f))
+                .background(color.copy(alpha = 0.15f))
         )
-        Box(Modifier.requiredSize(110.dp).clip(CircleShape).background(color))
-        Icon(icon, null, tint = Color.White, modifier = Modifier.size(30.dp))
+        Box(
+            Modifier
+                .requiredSize((94f + 22f * voice).dp)
+                .clip(CircleShape)
+                .background(color.copy(alpha = 0.3f))
+        )
+        Box(Modifier.requiredSize(82.dp).clip(CircleShape).background(color), contentAlignment = Alignment.Center) {
+            Icon(icon, null, tint = Color.White, modifier = Modifier.size(28.dp))
+        }
     }
 }
 
-/** The lock above a holding finger: it fills as the finger rises, and a tap locks it too. */
+/**
+ * Telegram Android's lock above a held mic: a 36dp pill (radius 18) that is 50dp tall at rest and
+ * shrinks to a 36dp circle as the finger rises; the shackle closes and the arrow above fades.
+ */
 @Composable
 internal fun AloRecordingLock(progress: Float, onLock: () -> Unit, modifier: Modifier = Modifier) {
+    val height = 50f - 14f * progress
     Box(
         modifier
-            .size(width = 44.dp, height = 72.dp)
-            .aloLiquidGlass(RoundedCornerShape(percent = 50))
+            .size(width = 36.dp, height = height.dp)
+            .aloLiquidGlass(RoundedCornerShape(18.dp))
             .clickable(onClick = onLock)
             .semantics { contentDescription = "Зафиксировать запись" },
         contentAlignment = Alignment.Center
     ) {
         val tint = if (progress > 0.6f) AloNativeAppAccent else AloNativeAppText
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Icon(if (progress > 0.85f) Icons.Rounded.Lock else Icons.Rounded.LockOpen, null, tint = tint, modifier = Modifier.size(18.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Icon(
                 Icons.Rounded.KeyboardArrowUp, null, tint = tint,
                 modifier = Modifier
-                    .size(18.dp)
+                    .size(14.dp)
                     .graphicsLayer {
-                        alpha = 1f - progress
-                        translationY = -progress * 8.dp.toPx()
+                        alpha = (1f - progress * 1.6f).coerceAtLeast(0f)
+                        translationY = -progress * 6.dp.toPx()
                     }
             )
+            Icon(if (progress > 0.85f) Icons.Rounded.Lock else Icons.Rounded.LockOpen, null, tint = tint, modifier = Modifier.size(18.dp))
         }
+    }
+}
+
+/** After locking, Telegram turns the lock into a 36dp pause button that stops into a preview. */
+@Composable
+internal fun AloRecordingPauseButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(36.dp)
+            .aloLiquidGlass(CircleShape)
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Завершить и прослушать запись" },
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(Icons.Rounded.Pause, null, tint = AloNativeAppText, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -137,7 +175,9 @@ internal class AloHeldMicController(
     val onDrag: (AloRecordingDrag) -> Unit,
     val onHeld: (Boolean) -> Unit,
     val onLock: () -> Unit,
-    val haptic: () -> Unit
+    val haptic: () -> Unit,
+    /** Telegram: 35 % of the screen width, at most 140dp. */
+    val cancelDistance: Float = AloRecordingDrag.MAX_CANCEL_DISTANCE
 )
 
 private val AloMicTapCancelled = Any()
@@ -145,7 +185,7 @@ private val AloMicTapCancelled = Any()
 /**
  * Telegram's mic button: a tap switches the mode, a hold records while the finger stays down,
  * sliding left cancels, sliding up locks, and letting go sends. A locked recording sends on a tap.
- * Round videos record in their own overlay, so for them the hold only starts the camera.
+ * Round videos are held the same way; their camera overlay takes the send, preview and cancel.
  */
 internal fun Modifier.aloHeldMic(controller: State<AloHeldMicController>): Modifier = pointerInput(Unit) {
     awaitEachGesture {
@@ -165,22 +205,17 @@ internal fun Modifier.aloHeldMic(controller: State<AloHeldMicController>): Modif
         }
         controller.value.haptic()
         controller.value.onStart()
-        if (!controller.value.isVoice) {
-            waitForUpOrCancellation()
-            return@awaitEachGesture
-        }
+        // A round video is held, slid, locked and released exactly like a voice message (Telegram Android).
         controller.value.onHeld(true)
-        val tracker = VelocityTracker().apply { addPosition(down.uptimeMillis, down.position) }
-        var drag = AloRecordingDrag()
+        var drag = AloRecordingDrag(cancelDistance = controller.value.cancelDistance)
         var resolved = false
         var released = false
         try {
             while (true) {
                 val event = awaitPointerEvent()
                 val change = event.changes.firstOrNull { it.id == down.id } ?: break
-                tracker.addPosition(change.uptimeMillis, change.position)
                 val delta = change.position - down.position
-                drag = AloRecordingDrag(delta.x.toDp().value, delta.y.toDp().value)
+                drag = AloRecordingDrag(delta.x.toDp().value, delta.y.toDp().value, controller.value.cancelDistance)
                 if (!resolved) {
                     val now = controller.value
                     when {
@@ -217,8 +252,7 @@ internal fun Modifier.aloHeldMic(controller: State<AloHeldMicController>): Modif
             now.onCancel()
             return@awaitEachGesture
         }
-        val velocity = tracker.calculateVelocity()
-        when (drag.release(velocity.x.toDp().value, velocity.y.toDp().value)) {
+        when (drag.release()) {
             AloRecordingDrag.Release.Cancel -> now.onCancel()
             AloRecordingDrag.Release.Lock -> {
                 now.haptic()
